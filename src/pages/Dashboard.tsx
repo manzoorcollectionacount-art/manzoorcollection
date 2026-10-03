@@ -34,6 +34,7 @@ export function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const { activeBranchId, setActiveBranchId, branches } = useBranch();
+  const currentBranch = branches.find(b => b.id === activeBranchId) || (branches.length > 0 ? branches[0] : null);
   const { enableDashboardEdit, enableBillEdit, dashboardOffsets, updateDashboardOffsets } = useSettings();
   
   const [sales, setSales] = useState<any[]>([]);
@@ -529,8 +530,8 @@ export function Dashboard() {
     return acc + (isReturn ? -Math.abs(suitsInSale || suitsInReturn) : (suitsInSale - suitsInReturn));
   }, 0);
 
-  const activeBranch = branches.find((b: any) => b.id === activeBranchId);
-  const branchDisplayName = activeBranchId === 'main' ? 'Main Branch (HQ)' : (activeBranch?.name || (activeBranchId ? activeBranchId : 'All Branches'));
+  const activeBranch = branches.find((b: any) => b.id === activeBranchId) || (branches.length > 0 ? branches[0] : null);
+  const branchDisplayName = activeBranch?.name || 'Branch';
   
   // Profit Password Lock State
   const [showProfitPrompt, setShowProfitPrompt] = useState(false);
@@ -840,21 +841,11 @@ export function Dashboard() {
               />
             </div>
 
-            {/* Branch Selector */}
-            {user?.role === 'super_admin' && (
-              <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/70 p-1 rounded-lg border border-slate-200 dark:border-slate-700">
-                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 pl-2">Branch:</label>
-                <select
-                  value={activeBranchId || ''}
-                  onChange={(e) => setActiveBranchId(e.target.value || '')}
-                  className="rounded-md border border-slate-300 dark:border-slate-600 px-2.5 py-1.5 bg-white dark:bg-slate-800 text-sm font-medium text-slate-800 dark:text-slate-100 focus:ring-1 focus:ring-sky-500 dark:focus:ring-sky-400 outline-none cursor-pointer"
-                >
-                  <option value="">All Branches</option>
-                  <option value="main">Main Branch</option>
-                  {branches.map((b: any) => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
-                  ))}
-                </select>
+            {/* Default Logged-In Branch Display */}
+            {currentBranch && (
+              <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/70 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                <span className="text-[11px] text-slate-400 font-bold uppercase">Branch:</span>
+                <span className="text-sky-600 dark:text-sky-400 font-bold">{currentBranch.name}</span>
               </div>
             )}
 

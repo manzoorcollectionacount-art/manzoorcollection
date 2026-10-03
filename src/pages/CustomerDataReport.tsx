@@ -42,8 +42,9 @@ export function CustomerDataReport() {
       const salesRef = collection(db, 'sales');
       let q = query(salesRef);
 
-      if (activeBranchId) {
-        q = query(q, where('branchId', '==', activeBranchId));
+      const branchToUse = activeBranchId || (branches.length > 0 ? branches[0].id : '');
+      if (branchToUse) {
+        q = query(q, where('branchId', '==', branchToUse));
       }
 
       if (dateRange.start && dateRange.end) {

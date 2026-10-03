@@ -90,16 +90,28 @@ export function BranchProvider({ children }: { children: ReactNode }) {
     };
   }, [user]);
 
-  // Set active branch when the rich user profile is ready
+  // Set active branch when user or branches ready
   useEffect(() => {
-    if (user) {
-      if (user.role !== 'super_admin') {
-        setActiveBranchId(user.branchId || 'main');
-      } else if (user.role === 'super_admin' && !activeBranchId) {
-        setActiveBranchId('main');
+    if (user && branches.length > 0) {
+      if (user.branchId && branches.some(b => b.id === user.branchId)) {
+        setActiveBranchId(user.branchId);
+      } else {
+        const savedBranchId = localStorage.getItem('lastActiveBranchId');
+        if (savedBranchId && branches.some(b => b.id === savedBranchId)) {
+          setActiveBranchId(savedBranchId);
+        } else if (!activeBranchId || activeBranchId === 'main' || activeBranchId === 'all' || !branches.some(b => b.id === activeBranchId)) {
+          setActiveBranchId(branches[0].id);
+        }
       }
     }
-  }, [user, activeBranchId]);
+  }, [user, branches]);
+
+  const handleSetActiveBranchId = (id: string | null) => {
+    setActiveBranchId(id);
+    if (id) {
+      try { localStorage.setItem('lastActiveBranchId', id); } catch(e) {}
+    }
+  };
 
   // Dynamically switch the Firebase project when active branch changes
   useEffect(() => {
@@ -123,7 +135,7 @@ export function BranchProvider({ children }: { children: ReactNode }) {
   }, [activeBranchId, branches, user]);
 
   return (
-    <BranchContext.Provider value={{ branches, activeBranchId, setActiveBranchId, loading }}>
+    <BranchContext.Provider value={{ branches, activeBranchId, setActiveBranchId: handleSetActiveBranchId, loading }}>
       {children}
     </BranchContext.Provider>
   );

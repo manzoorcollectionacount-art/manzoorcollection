@@ -241,27 +241,16 @@ export function ProfitLossReport() {
         </div>
         
         <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto items-center">
-          <select
-            value={activeBranchId || 'all'}
-            onChange={(e) => setActiveBranchId(e.target.value === 'all' ? null : e.target.value)}
-            className="input-field font-semibold text-sky-600 dark:text-sky-400"
-          >
-            <option value="all">All Branches (Overall)</option>
-            <option value="main">Main Branch (HQ)</option>
-            {branches.map(b => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
-          </select>
           <input 
             type="date" 
             value={startDate} 
-            onChange={e => setStartDate(e.target.value)}
+            onChange={e => setStartDate(e.target.value)} 
             className="input-field"
           />
           <input 
             type="date" 
             value={endDate} 
-            onChange={e => setEndDate(e.target.value)}
+            onChange={e => setEndDate(e.target.value)} 
             className="input-field"
           />
           <button 

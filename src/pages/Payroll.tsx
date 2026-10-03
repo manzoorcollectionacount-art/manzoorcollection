@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useBranch } from '../context/BranchContext';
 import { collection, query, where, onSnapshot, Timestamp, orderBy, doc, setDoc, getDocs, getDoc, runTransaction, writeBatch, addDoc, updateDoc, deleteDoc } from '../lib/customFirestore';
 import { db, safeGetDocs, safeCollectionSnapshot } from '../lib/firebase';
-import { ReceiptCent, Folder, ArrowLeft, Plus, Printer, Trash2, CheckCircle } from 'lucide-react';
+import { ReceiptCent, Folder, ArrowLeft, Plus, Printer, Trash2, CheckCircle, Calendar } from 'lucide-react';
 import { printInvoice } from '../lib/print';
 import { useSettings } from '../context/SettingsContext';
 
@@ -49,10 +49,21 @@ export function Payroll() {
   const [newFolderMonth, setNewFolderMonth] = useState('');
   const [selectedEmpId, setSelectedEmpId] = useState('');
   const [month, setMonth] = useState(new Date().toISOString().substring(0, 7)); // YYYY-MM
-  const [days, setDays] = useState('');
+  const [days, setDays] = useState('26');
+  const [batchWorkingDays, setBatchWorkingDays] = useState<string>('26');
   const [baseSalary, setBaseSalary] = useState('');
   const [advances, setAdvances] = useState('');
   const [recentAdvance, setRecentAdvance] = useState('');
+  
+  const getDaysInMonth = (mStr: string) => {
+    try {
+      const [yyyy, mm] = (mStr || '').split('-');
+      if (!yyyy || !mm) return '30';
+      return new Date(Number(yyyy), Number(mm), 0).getDate().toString();
+    } catch (e) {
+      return '30';
+    }
+  };
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedPrintSlip, setSelectedPrintSlip] = useState<any>(null);
@@ -91,13 +102,15 @@ export function Payroll() {
     const emp = employees.find(e => e.id === empId);
     if (emp) {
       if (emp.monthlySalary) {
-        setBaseSalary(emp.monthlySalary.toString());
         let daysInMonth = 30;
         if (currentMonth) {
           const [yyyy, mm] = currentMonth.split('-');
-          daysInMonth = new Date(Number(yyyy), Number(mm), 0).getDate();
+          daysInMonth = new Date(Number(yyyy), Number(mm), 0).getDate() || 30;
         }
-        setDays(daysInMonth.toString());
+        const dToKeep = days || batchWorkingDays || '26';
+        setDays(dToKeep);
+        const dailyEq = emp.monthlySalary / daysInMonth;
+        setBaseSalary(Math.round(dailyEq * Number(dToKeep)).toString());
       } else if (emp.dailyWage) {
         setBaseSalary('');
         setDays('');
@@ -178,7 +191,7 @@ export function Payroll() {
     setBaseSalary('');
     setAdvances('');
     setRecentAdvance('');
-    setDays('');
+    setDays(batchWorkingDays || '26');
   };
 
   const handleSaveAllSlips = async () => {
@@ -385,6 +398,43 @@ export function Payroll() {
               {isSubmitting ? 'Saving...' : `Save ${pendingSlips.length} Slips to Ledger`}
             </button>
           </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-slate-900 p-3 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                <Calendar className="w-4 h-4 text-sky-500" />
+                Working Days:
+              </span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  min="1"
+                  max="31"
+                  value={batchWorkingDays}
+                  onChange={(e) => setBatchWorkingDays(e.target.value)}
+                  className="w-16 text-center input-field py-1 px-2 text-sm font-bold text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/40 border-sky-300 dark:border-sky-700 rounded focus:ring-2 focus:ring-sky-500"
+                  placeholder="26"
+                />
+                <button
+                  type="button"
+                  onClick={() => setBatchWorkingDays('26')}
+                  className={`px-2.5 py-1 text-xs font-semibold rounded border transition-colors ${batchWorkingDays === '26' ? 'bg-sky-600 text-white border-sky-600' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200'}`}
+                >
+                  26 Days (Standard)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBatchWorkingDays(getDaysInMonth(activeFolderMonth || month))}
+                  className={`px-2.5 py-1 text-xs font-semibold rounded border transition-colors ${batchWorkingDays === getDaysInMonth(activeFolderMonth || month) ? 'bg-sky-600 text-white border-sky-600' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200'}`}
+                >
+                  {getDaysInMonth(activeFolderMonth || month)} Days (Full Month)
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Days entered on an employee row automatically carry over to next employees.
+            </p>
+          </div>
           
           <div className="overflow-x-auto border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm">
             <table className="w-full text-left border-collapse">
@@ -437,7 +487,16 @@ export function Payroll() {
                       )
                     }
                     
-                    return <EmployeePayrollRow key={emp.id} emp={emp} month={activeFolderMonth as string} onAdd={(slip) => setPendingSlips([...pendingSlips, { id: Math.random().toString(), ...slip }])} />
+                    return (
+                      <EmployeePayrollRow 
+                        key={emp.id} 
+                        emp={emp} 
+                        month={activeFolderMonth as string} 
+                        defaultWorkingDays={batchWorkingDays}
+                        onDaysChangedByUser={(newDays) => setBatchWorkingDays(newDays)}
+                        onAdd={(slip) => setPendingSlips([...pendingSlips, { id: Math.random().toString(), ...slip }])} 
+                      />
+                    );
                  })}
               </tbody>
             </table>
@@ -534,186 +593,200 @@ export function Payroll() {
 
       {/* DEDICATED ALL-COMBINED PRINT VIEW (ONLY VISIBLE ON PRINT) */}
       {!selectedPrintSlip && (
-        <div id="payroll-print-content" className="hidden print:block print:bg-white print:w-full print:static print:z-auto print:h-auto print:p-0">
-          <div className="text-center border-b border-slate-300 dark:border-slate-600 pb-4 mb-6">
-            <h1 className="text-3xl font-bold font-serif uppercase tracking-widest text-slate-900 dark:text-slate-50">
-               {activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 0)}
+        <div id="payroll-print-content" className="hidden print:block print:bg-white print:w-full print:static print:z-auto print:h-auto print:p-0 text-black">
+          <div className="text-center border-b-2 border-black pb-4 mb-5">
+            <h1 className="text-3xl font-black font-serif uppercase tracking-widest text-black">
+               {activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 'Manzoor Collection')}
             </h1>
-            <h2 className="text-xl font-bold text-slate-700 dark:text-slate-200 mt-2 uppercase tracking-widest">Payroll Register</h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">Printed on {new Date().toLocaleString()}</p>
+            <h2 className="text-xl font-black text-black mt-1 uppercase tracking-wider">Payroll Register - {activeFolderMonth || month}</h2>
+            <p className="text-xs font-bold text-black mt-1">Printed on {new Date().toLocaleString()}</p>
           </div>
 
-          <table className="w-full text-sm mb-8 border border-slate-300 dark:border-slate-600">
-            <thead className="bg-slate-100 dark:bg-slate-950 border-b border-slate-300 dark:border-slate-600">
-              <tr className="text-left font-semibold text-slate-700 dark:text-slate-200 uppercase tracking-wider text-xs">
-                <th className="px-4 py-3 border-r border-slate-300 dark:border-slate-600">Employee Name</th>
-                <th className="px-4 py-3 border-r border-slate-300 dark:border-slate-600 text-center">Days</th>
-                <th className="px-4 py-3 border-r border-slate-300 dark:border-slate-600 text-right">Monthly Salary</th>
-                <th className="px-4 py-3 border-r border-slate-300 dark:border-slate-600 text-right">This Month Salary</th>
-                <th className="px-4 py-3 border-r border-slate-300 dark:border-slate-600 text-right">Previous Advance</th>
-                <th className="px-4 py-3 border-r border-slate-300 dark:border-slate-600 text-right">Deductions</th>
-                <th className="px-4 py-3 border-r border-slate-300 dark:border-slate-600 text-right">Advance Given</th>
-                <th className="px-4 py-3 border-r border-slate-300 dark:border-slate-600 text-right">Remaining Adv</th>
-                <th className="px-4 py-3 border-r border-slate-300 dark:border-slate-600 text-right">Net Payable</th>
-                <th className="px-4 py-3 border-r border-slate-300 dark:border-slate-600 text-center">Status</th>
-                <th className="px-4 py-3 text-center">Signature</th>
+          <table className="w-full text-xs mb-8 border-2 border-black border-collapse">
+            <thead className="bg-slate-200 border-b-2 border-black">
+              <tr className="text-left font-black text-black uppercase tracking-wider text-[11px]">
+                <th className="px-2.5 py-2.5 border border-black font-black text-black">Employee Name</th>
+                <th className="px-2 py-2.5 border border-black text-center font-black text-black">Days</th>
+                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Monthly Salary</th>
+                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">This Month Salary</th>
+                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Previous Advance</th>
+                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Deductions</th>
+                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Advance Given</th>
+                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Remaining Adv</th>
+                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Net Payable</th>
+                <th className="px-2 py-2.5 border border-black text-center font-black text-black">Status</th>
+                <th className="px-3 py-2.5 border border-black text-center font-black text-black">Signature</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-300">
+            <tbody className="divide-y divide-black text-black">
               {payslips.length === 0 ? (
-                <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-500 dark:text-slate-400 text-lg">No payroll records found.</td></tr>
+                <tr><td colSpan={11} className="px-4 py-8 text-center text-black font-black text-lg border border-black">No payroll records found.</td></tr>
               ) : (
                 filteredPayslips.map(slip => (
-                  <tr key={slip.id}>
-                    <td className="px-4 py-4 font-bold text-slate-900 dark:text-slate-50 border-r border-slate-300 dark:border-slate-600">{slip.employeeName}</td>
-                    <td className="px-4 py-4 text-center font-mono border-r border-slate-300 dark:border-slate-600">{slip.days || '-'}</td>
-                    <td className="px-4 py-4 text-right font-mono border-r border-slate-300 dark:border-slate-600">{(employees.find(e => e.id === slip.employeeId)?.monthlySalary || 0).toLocaleString()}</td>
-                    <td className="px-4 py-4 text-right font-mono border-r border-slate-300 dark:border-slate-600">{slip.baseSalary.toLocaleString()}</td>
-                    <td className="px-4 py-4 text-right font-mono text-amber-600 border-r border-slate-300 dark:border-slate-600">{(slip.previousAdvance !== undefined ? slip.previousAdvance : (employees.find(e => e.id === slip.employeeId)?.advanceBalance || 0)).toLocaleString()}</td>
-                    <td className="px-4 py-4 text-right font-mono text-rose-600 border-r border-slate-300 dark:border-slate-600">{(slip.advances || 0).toLocaleString()}</td>
-                    <td className="px-4 py-4 text-right font-mono text-blue-600 border-r border-slate-300 dark:border-slate-600">{(slip.recentAdvance || 0).toLocaleString()}</td>
-                    <td className="px-4 py-4 text-right font-mono text-amber-600 border-r border-slate-300 dark:border-slate-600">{(slip.remainingAdvance !== undefined ? slip.remainingAdvance : ((employees.find(e => e.id === slip.employeeId)?.advanceBalance || 0) - (slip.advances || 0) + (slip.recentAdvance || 0))).toLocaleString()}</td>
-                    <td className="px-4 py-4 text-right font-mono font-bold text-slate-900 dark:text-slate-50 border-r border-slate-300 dark:border-slate-600">PKR {slip.netPayable.toLocaleString()}</td>
-                    <td className="px-4 py-4 text-center border-r border-slate-300 dark:border-slate-600 text-xs font-bold uppercase">
+                  <tr key={slip.id} className="border-b border-black text-black">
+                    <td className="px-2.5 py-2.5 font-black text-black border border-black">{slip.employeeName}</td>
+                    <td className="px-2 py-2.5 text-center font-mono font-bold text-black border border-black">{slip.days || '-'}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{(employees.find(e => e.id === slip.employeeId)?.monthlySalary || 0).toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{slip.baseSalary.toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{(slip.previousAdvance !== undefined ? slip.previousAdvance : (employees.find(e => e.id === slip.employeeId)?.advanceBalance || 0)).toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{(slip.advances || 0).toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{(slip.recentAdvance || 0).toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{(slip.remainingAdvance !== undefined ? slip.remainingAdvance : ((employees.find(e => e.id === slip.employeeId)?.advanceBalance || 0) - (slip.advances || 0) + (slip.recentAdvance || 0))).toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-black text-black border border-black">PKR {slip.netPayable.toLocaleString()}</td>
+                    <td className="px-2 py-2.5 text-center border border-black text-xs font-black uppercase text-black">
                        {slip.paymentStatus || 'Pending'}
                     </td>
-                    <td className="px-4 py-4 text-center align-bottom">
-                      <div className="w-32 mx-auto border-b border-slate-400"></div>
+                    <td className="px-2 py-2.5 text-center align-bottom border border-black">
+                      <div className="w-24 mx-auto border-b-2 border-black pt-4"></div>
                     </td>
                   </tr>
                 ))
               )}
               {payslips.length > 0 && (
-                <tr className="bg-slate-100 dark:bg-slate-950 font-bold border-t-4 border-slate-400 text-base">
-                  <td className="px-4 py-4 text-right text-slate-900 dark:text-slate-50 uppercase tracking-wider border-r border-slate-300 dark:border-slate-600">Total Amounts</td>
-                  <td className="px-4 py-4 text-center font-mono text-slate-900 dark:text-slate-50 border-r border-slate-300 dark:border-slate-600">{filteredPayslips.reduce((sum, s) => sum + (s.days || 0), 0)}</td>
-                  <td className="px-4 py-4 text-right font-mono text-slate-900 dark:text-slate-50 border-r border-slate-300 dark:border-slate-600">{filteredPayslips.reduce((sum, s) => sum + (employees.find(e => e.id === s.employeeId)?.monthlySalary || 0), 0).toLocaleString()}</td>
-                  <td className="px-4 py-4 text-right font-mono text-slate-900 dark:text-slate-50 border-r border-slate-300 dark:border-slate-600">{filteredPayslips.reduce((sum, s) => sum + s.baseSalary, 0).toLocaleString()}</td>
-                  <td className="px-4 py-4 text-right font-mono text-amber-600 border-r border-slate-300 dark:border-slate-600">{filteredPayslips.reduce((sum, s) => sum + (s.previousAdvance !== undefined ? s.previousAdvance : (employees.find(e => e.id === s.employeeId)?.advanceBalance || 0)), 0).toLocaleString()}</td>
-                  <td className="px-4 py-4 text-right font-mono text-rose-600 border-r border-slate-300 dark:border-slate-600">{filteredPayslips.reduce((sum, s) => sum + (s.advances || 0), 0).toLocaleString()}</td>
-                  <td className="px-4 py-4 text-right font-mono text-blue-600 border-r border-slate-300 dark:border-slate-600">{filteredPayslips.reduce((sum, s) => sum + (s.recentAdvance || 0), 0).toLocaleString()}</td>
-                  <td className="px-4 py-4 text-right font-mono text-amber-600 border-r border-slate-300 dark:border-slate-600"></td>
-                  <td className="px-4 py-4 text-right font-mono font-bold text-emerald-800 border-r border-slate-300 dark:border-slate-600">PKR {filteredPayslips.reduce((sum, s) => sum + s.netPayable, 0).toLocaleString()}</td>
-                  <td className="px-4 py-4"></td>
-                  <td className="px-4 py-4"></td>
+                <tr className="bg-slate-200 font-black border-t-2 border-b-2 border-black text-xs text-black">
+                  <td className="px-2.5 py-3 text-right text-black uppercase tracking-wider border border-black font-black">Total Amounts</td>
+                  <td className="px-2 py-3 text-center font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.days || 0), 0)}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (employees.find(e => e.id === s.employeeId)?.monthlySalary || 0), 0).toLocaleString()}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + s.baseSalary, 0).toLocaleString()}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.previousAdvance !== undefined ? s.previousAdvance : (employees.find(e => e.id === s.employeeId)?.advanceBalance || 0)), 0).toLocaleString()}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.advances || 0), 0).toLocaleString()}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.recentAdvance || 0), 0).toLocaleString()}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black"></td>
+                  <td className="px-2.5 py-3 text-right font-mono font-black text-black border border-black">PKR {filteredPayslips.reduce((sum, s) => sum + s.netPayable, 0).toLocaleString()}</td>
+                  <td className="px-2 py-3 border border-black"></td>
+                  <td className="px-2 py-3 border border-black"></td>
                 </tr>
               )}
             </tbody>
           </table>
 
-          <div className="mt-16 text-center text-xs text-slate-400 italic">
-            This payroll register is a computer-generated document.
+          <div className="mt-12 flex justify-between items-end px-6 text-black">
+            <div className="text-center">
+              <div className="w-52 border-b-2 border-black mb-1.5"></div>
+              <p className="text-xs font-black uppercase tracking-wider text-black">Accountant / Manager Signature</p>
+            </div>
+            <div className="text-center">
+              <div className="w-52 border-b-2 border-black mb-1.5"></div>
+              <p className="text-xs font-black uppercase tracking-wider text-black">Director / Owner Signature</p>
+            </div>
+          </div>
+
+          <div className="mt-8 text-center text-xs font-bold text-black italic">
+            This payroll register is a computer-generated official document.
           </div>
         </div>
       )}
 
 
       {selectedPrintSlip && (
-        <div id="individual-payslip-print" className="hidden print:block print:bg-white print:w-full print:static print:z-auto print:h-auto print:p-0">
-          <div className="max-w-2xl mx-auto border border-slate-300 dark:border-slate-600 p-8">
-            <div className="text-center border-b border-slate-300 dark:border-slate-600 pb-6 mb-6">
-              <h1 className="text-3xl font-bold uppercase tracking-widest text-slate-900 dark:text-slate-50 mb-1">
-                {activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 'Branch Name')}
+        <div id="individual-payslip-print" className="hidden print:block print:bg-white print:w-full print:static print:z-auto print:h-auto print:p-0 text-black">
+          <div className="max-w-2xl mx-auto border-2 border-black p-8 text-black">
+            <div className="text-center border-b-2 border-black pb-6 mb-6">
+              <h1 className="text-3xl font-black uppercase tracking-widest text-black mb-1">
+                {activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 'Manzoor Collection')}
               </h1>
               {(branches.find(b => b.id === activeBranchId)?.phone || branches.find(b => b.id === activeBranchId)?.phone2) && (
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-0.5">
+                <p className="text-sm font-bold text-black mb-0.5">
                   {branches.find(b => b.id === activeBranchId)?.phone && <span>Phone 1: {branches.find(b => b.id === activeBranchId)?.phone}</span>}
                   {branches.find(b => b.id === activeBranchId)?.phone && branches.find(b => b.id === activeBranchId)?.phone2 && <span> | </span>}
                   {branches.find(b => b.id === activeBranchId)?.phone2 && <span>Phone 2: {branches.find(b => b.id === activeBranchId)?.phone2}</span>}
                 </p>
               )}
               {branches.find(b => b.id === activeBranchId)?.address && (
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                <p className="text-sm font-bold text-black mb-1">
                   {branches.find(b => b.id === activeBranchId)?.address}
                 </p>
               )}
               {branches.find(b => b.id === activeBranchId)?.onlinePhone && (
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                <p className="text-sm font-bold text-black mb-1">
                   Online Support: {branches.find(b => b.id === activeBranchId)?.onlinePhone}
                 </p>
               )}
-              <p className="text-sm text-slate-500 dark:text-slate-400 uppercase tracking-widest">Salary Slip</p>
+              <p className="text-base font-black text-black uppercase tracking-widest mt-2 border-2 border-black py-1 inline-block px-5">SALARY SLIP</p>
             </div>
 
-            <div className="grid grid-cols-2 gap-6 mb-8 text-sm">
+            <div className="grid grid-cols-2 gap-6 mb-6 text-sm border-b-2 border-black pb-4 text-black">
               <div>
-                <p className="text-slate-500 dark:text-slate-400 mb-1">Employee Details</p>
-                <p className="font-bold text-lg text-slate-800 dark:text-slate-100">{selectedPrintSlip.employeeName}</p>
+                <p className="font-bold text-xs uppercase tracking-wider text-black mb-1">Employee Details</p>
+                <p className="font-black text-xl text-black">{selectedPrintSlip.employeeName}</p>
+                {employees.find(e => e.id === selectedPrintSlip.employeeId)?.role && (
+                  <p className="text-xs font-bold text-black uppercase mt-0.5">{employees.find(e => e.id === selectedPrintSlip.employeeId)?.role}</p>
+                )}
               </div>
               <div className="text-right">
-                <p className="text-slate-500 dark:text-slate-400 mb-1">Payslip Period</p>
-                <p className="font-bold text-lg text-slate-800 dark:text-slate-100">{selectedPrintSlip.month}</p>
-                <p className="text-slate-500 dark:text-slate-400 mt-1">
-                  Status: {selectedPrintSlip.paymentStatus === 'Paid' ? 'Paid' : 'Pending'}
+                <p className="font-bold text-xs uppercase tracking-wider text-black mb-1">Payslip Period</p>
+                <p className="font-black text-xl text-black">{selectedPrintSlip.month}</p>
+                <p className="text-xs font-bold text-black mt-1 uppercase">
+                  Status: <span className="font-black">{selectedPrintSlip.paymentStatus === 'Paid' ? 'PAID' : 'PENDING'}</span>
                 </p>
               </div>
             </div>
 
-            <table className="w-full text-sm mb-8">
-              <thead className="bg-slate-100 dark:bg-slate-950">
+            <table className="w-full text-sm mb-6 border-2 border-black border-collapse">
+              <thead className="bg-slate-200 border-b-2 border-black text-black">
                 <tr>
-                  <th className="py-2 px-4 text-left font-semibold text-slate-700 dark:text-slate-200">Description</th>
-                  <th className="py-2 px-4 text-right font-semibold text-slate-700 dark:text-slate-200">Amount (PKR)</th>
+                  <th className="py-2.5 px-4 text-left font-black text-black uppercase tracking-wider border-r border-black">Description</th>
+                  <th className="py-2.5 px-4 text-right font-black text-black uppercase tracking-wider">Amount (PKR)</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                <tr>
-                  <td className="py-3 px-4 flex items-center justify-between">
-                    <span>Monthly Salary (Full Month)</span>
+              <tbody className="divide-y divide-black text-black font-semibold">
+                <tr className="border-b border-black">
+                  <td className="py-3 px-4 font-bold text-black border-r border-black">
+                    Monthly Salary (Full Month Rate)
                   </td>
-                  <td className="py-3 px-4 text-right font-mono">{(employees.find(e => e.id === selectedPrintSlip.employeeId)?.monthlySalary || 0).toLocaleString()}</td>
+                  <td className="py-3 px-4 text-right font-mono font-bold text-black">{(employees.find(e => e.id === selectedPrintSlip.employeeId)?.monthlySalary || 0).toLocaleString()}</td>
                 </tr>
-                <tr>
-                  <td className="py-3 px-4 flex items-center justify-between text-slate-900 dark:text-slate-50 font-bold bg-slate-50 dark:bg-slate-900/50">
+                <tr className="border-b border-black bg-slate-100 font-bold">
+                  <td className="py-3 px-4 flex items-center justify-between text-black font-black border-r border-black">
                     <span>This Month Salary</span>
-                    {selectedPrintSlip.days && <span className="text-xs text-slate-500 font-normal ml-2">({selectedPrintSlip.days} Working Days)</span>}
+                    {selectedPrintSlip.days && <span className="text-xs font-bold text-black ml-2">({selectedPrintSlip.days} Working Days)</span>}
                   </td>
-                  <td className="py-3 px-4 text-right font-mono font-bold text-slate-900 dark:text-slate-50 bg-slate-50 dark:bg-slate-900/50">{selectedPrintSlip.baseSalary.toLocaleString()}</td>
+                  <td className="py-3 px-4 text-right font-mono font-black text-black">{selectedPrintSlip.baseSalary.toLocaleString()}</td>
                 </tr>
                 {(selectedPrintSlip.previousAdvance !== undefined ? selectedPrintSlip.previousAdvance : (employees.find(e => e.id === selectedPrintSlip.employeeId)?.advanceBalance || '') > 0) && (
-                  <tr>
-                    <td className="py-3 px-4">Previous Advance (Owed before this payroll)</td>
-                    <td className="py-3 px-4 text-right font-mono text-amber-600">{(selectedPrintSlip.previousAdvance !== undefined ? selectedPrintSlip.previousAdvance : (employees.find(e => e.id === selectedPrintSlip.employeeId)?.advanceBalance || 0)).toLocaleString()}</td>
+                  <tr className="border-b border-black">
+                    <td className="py-3 px-4 font-bold text-black border-r border-black">Previous Advance (Owed before this payroll)</td>
+                    <td className="py-3 px-4 text-right font-mono font-bold text-black">{(selectedPrintSlip.previousAdvance !== undefined ? selectedPrintSlip.previousAdvance : (employees.find(e => e.id === selectedPrintSlip.employeeId)?.advanceBalance || 0)).toLocaleString()}</td>
                   </tr>
                 )}
                 {selectedPrintSlip.advances > 0 && (
-                  <tr>
-                    <td className="py-3 px-4">Deductions (Old Adv)</td>
-                    <td className="py-3 px-4 text-right font-mono text-rose-600">-{(selectedPrintSlip.advances || 0).toLocaleString()}</td>
+                  <tr className="border-b border-black">
+                    <td className="py-3 px-4 font-bold text-black border-r border-black">Advance Deduction (Deducted from Salary)</td>
+                    <td className="py-3 px-4 text-right font-mono font-black text-black">-{(selectedPrintSlip.advances || 0).toLocaleString()}</td>
                   </tr>
                 )}
                 {selectedPrintSlip.recentAdvance > 0 && (
-                  <tr>
-                    <td className="py-3 px-4">Advance Given Now</td>
-                    <td className="py-3 px-4 text-right font-mono text-blue-600">+{(selectedPrintSlip.recentAdvance || 0).toLocaleString()}</td>
+                  <tr className="border-b border-black">
+                    <td className="py-3 px-4 font-bold text-black border-r border-black">New Advance Given Now</td>
+                    <td className="py-3 px-4 text-right font-mono font-black text-black">+{(selectedPrintSlip.recentAdvance || 0).toLocaleString()}</td>
                   </tr>
                 )}
                 {((selectedPrintSlip.remainingAdvance !== undefined ? selectedPrintSlip.remainingAdvance : ((employees.find(e => e.id === selectedPrintSlip.employeeId)?.advanceBalance || 0) - (selectedPrintSlip.advances || 0) + (selectedPrintSlip.recentAdvance || 0))) > 0) && (
-                  <tr className="border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                    <td className="py-2 px-4 font-semibold text-slate-700 dark:text-slate-200 text-xs uppercase tracking-wider">Remaining Advance Balance</td>
-                    <td className="py-2 px-4 text-right font-mono text-amber-600 font-bold">{(selectedPrintSlip.remainingAdvance !== undefined ? selectedPrintSlip.remainingAdvance : ((employees.find(e => e.id === selectedPrintSlip.employeeId)?.advanceBalance || 0) - (selectedPrintSlip.advances || 0) + (selectedPrintSlip.recentAdvance || 0))).toLocaleString()}</td>
+                  <tr className="border-t-2 border-b-2 border-black bg-slate-100 font-bold">
+                    <td className="py-2.5 px-4 font-black text-black text-xs uppercase tracking-wider border-r border-black">Remaining Advance Balance</td>
+                    <td className="py-2.5 px-4 text-right font-mono font-black text-black">{(selectedPrintSlip.remainingAdvance !== undefined ? selectedPrintSlip.remainingAdvance : ((employees.find(e => e.id === selectedPrintSlip.employeeId)?.advanceBalance || 0) - (selectedPrintSlip.advances || 0) + (selectedPrintSlip.recentAdvance || 0))).toLocaleString()}</td>
                   </tr>
                 )}
               </tbody>
             </table>
 
-            <div className="flex justify-end p-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded">
+            <div className="flex justify-end p-4 border-2 border-black rounded mb-8 bg-slate-100">
               <div className="text-right">
-                <p className="text-sm text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1">Net Payable</p>
-                <p className="text-2xl font-bold text-slate-900 dark:text-slate-50 font-mono">PKR {selectedPrintSlip.netPayable.toLocaleString()}</p>
+                <p className="text-xs font-black uppercase tracking-widest mb-1 text-black">NET PAYABLE AMOUNT</p>
+                <p className="text-3xl font-black text-black font-mono">PKR {selectedPrintSlip.netPayable.toLocaleString()}</p>
               </div>
             </div>
 
-            <div className="mt-16 flex justify-between items-end">
-              <div className="border-t border-slate-400 pt-2 w-48 text-center text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+            <div className="mt-12 flex justify-between items-end text-black">
+              <div className="border-t-2 border-black pt-2 w-48 text-center text-xs font-black uppercase tracking-wider text-black">
                 Employer Signature
               </div>
-              <div className="border-t border-slate-400 pt-2 w-48 text-center text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              <div className="border-t-2 border-black pt-2 w-48 text-center text-xs font-black uppercase tracking-wider text-black">
                 Employee Signature
               </div>
             </div>
             
-            <div className="text-center mt-12 text-[10px] text-slate-400 italic">
+            <div className="text-center mt-8 text-xs font-bold text-black italic">
               This is a computer generated document and requires no stamp.
             </div>
           </div>
@@ -721,55 +794,62 @@ export function Payroll() {
       )}
 
       {selectedPrintSlip && (
-        <div id="individual-payslip-thermal-print" className="hidden print:block print:bg-white" style={{ fontFamily: 'monospace' }}>
-          <div className="p-4 text-black text-xs">
-            <div className="text-center mb-4">
-              <h1 className="text-lg font-bold uppercase">{activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 'Business')}</h1>
-              <p>Salary Slip - {selectedPrintSlip.month}</p>
-              <div className="border-b border-black border-dashed my-2"></div>
+        <div id="individual-payslip-thermal-print" className="hidden print:block print:bg-white text-black" style={{ fontFamily: 'monospace' }}>
+          <div className="p-3 text-black text-xs font-bold leading-tight">
+            <div className="text-center mb-3">
+              <h1 className="text-base font-black uppercase tracking-wider text-black">{activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 'Business')}</h1>
+              <p className="text-sm font-black text-black">SALARY SLIP - {selectedPrintSlip.month}</p>
+              <div className="border-b-2 border-black border-dashed my-2"></div>
             </div>
 
-            <div className="space-y-1">
-              <p><strong>Employee:</strong> {selectedPrintSlip.employeeName}</p>
+            <div className="space-y-1.5 font-bold text-black">
+              <p><strong>Employee:</strong> <span className="font-black text-sm">{selectedPrintSlip.employeeName}</span></p>
               <p><strong>Date:</strong> {new Date(selectedPrintSlip.date).toLocaleDateString()}</p>
-              <div className="border-b border-black border-dashed my-2"></div>
+              {selectedPrintSlip.days && <p><strong>Days:</strong> {selectedPrintSlip.days} Working Days</p>}
+              <div className="border-b-2 border-black border-dashed my-2"></div>
 
-              <div className="flex justify-between">
+              <div className="flex justify-between font-bold text-black">
                 <span>Base Salary:</span>
-                <span>{selectedPrintSlip.baseSalary.toLocaleString()}</span>
+                <span className="font-black">{selectedPrintSlip.baseSalary.toLocaleString()}</span>
               </div>
               {selectedPrintSlip.advances > 0 && (
-                <div className="flex justify-between text-rose-600">
+                <div className="flex justify-between font-bold text-black">
                   <span>Adv Deduction:</span>
-                  <span>-{selectedPrintSlip.advances.toLocaleString()}</span>
+                  <span className="font-black">-{selectedPrintSlip.advances.toLocaleString()}</span>
                 </div>
               )}
               {selectedPrintSlip.recentAdvance > 0 && (
-                <div className="flex justify-between text-blue-600 font-bold">
+                <div className="flex justify-between font-bold text-black">
                   <span>New Advance:</span>
-                  <span>+{selectedPrintSlip.recentAdvance.toLocaleString()}</span>
+                  <span className="font-black">+{selectedPrintSlip.recentAdvance.toLocaleString()}</span>
                 </div>
               )}
-              <div className="border-b border-black border-dashed my-2"></div>
-              <div className="flex justify-between text-sm font-bold">
+              {selectedPrintSlip.remainingAdvance > 0 && (
+                <div className="flex justify-between font-bold text-black">
+                  <span>Rem Advance:</span>
+                  <span className="font-black">{selectedPrintSlip.remainingAdvance.toLocaleString()}</span>
+                </div>
+              )}
+              <div className="border-b-2 border-black border-dashed my-2"></div>
+              <div className="flex justify-between text-base font-black text-black">
                 <span>NET PAYABLE:</span>
                 <span>PKR {selectedPrintSlip.netPayable.toLocaleString()}</span>
               </div>
-              <div className="border-b border-black border-dashed my-2"></div>
+              <div className="border-b-2 border-black border-dashed my-2"></div>
               
-              <div className="mt-4 flex justify-between pt-6">
+              <div className="mt-6 flex justify-between pt-6 text-black font-bold">
                 <div className="text-center">
-                  <div className="w-20 border-b border-black mb-1"></div>
-                  <p className="text-[8px]">Employer</p>
+                  <div className="w-20 border-b-2 border-black mb-1"></div>
+                  <p className="text-[9px] font-black uppercase text-black">Employer</p>
                 </div>
                 <div className="text-center">
-                  <div className="w-20 border-b border-black mb-1"></div>
-                  <p className="text-[8px]">Labour</p>
+                  <div className="w-20 border-b-2 border-black mb-1"></div>
+                  <p className="text-[9px] font-black uppercase text-black">Labour</p>
                 </div>
               </div>
             </div>
 
-            <div className="mt-6 text-center text-[9px]">
+            <div className="mt-4 text-center text-[10px] font-bold text-black">
               <p>Printed: {new Date().toLocaleString()}</p>
             </div>
           </div>
@@ -785,35 +865,54 @@ export function Payroll() {
 interface EmployeePayrollRowProps {
   emp: any;
   month: string;
+  defaultWorkingDays?: string;
+  onDaysChangedByUser?: (newDays: string) => void;
   onAdd: (slip: any) => void;
 }
 
-const EmployeePayrollRow: React.FC<EmployeePayrollRowProps> = ({ emp, month, onAdd }) => {
-  const [days, setDays] = React.useState('');
+const EmployeePayrollRow: React.FC<EmployeePayrollRowProps> = ({ 
+  emp, 
+  month, 
+  defaultWorkingDays, 
+  onDaysChangedByUser, 
+  onAdd 
+}) => {
+  const [days, setDays] = React.useState(defaultWorkingDays || '26');
+  const [isCustomized, setIsCustomized] = React.useState(false);
   const [baseSalary, setBaseSalary] = React.useState('');
   const [deductions, setDeductions] = React.useState('');
   const [newAdvance, setNewAdvance] = React.useState('');
   const [newAdvanceDate, setNewAdvanceDate] = React.useState(new Date().toISOString().substring(0, 10));
 
   React.useEffect(() => {
-    if (emp.monthlySalary) {
-      setBaseSalary(emp.monthlySalary.toString());
-      if (month) {
-        const [yyyy, mm] = month.split('-');
-        setDays(new Date(Number(yyyy), Number(mm), 0).getDate().toString());
+    if (!isCustomized) {
+      const activeDays = defaultWorkingDays || '26';
+      setDays(activeDays);
+      const d = Number(activeDays) || 0;
+      if (emp.monthlySalary) {
+        let daysInMonth = 30;
+        if (month) {
+          const [yyyy, mm] = month.split('-');
+          daysInMonth = new Date(Number(yyyy), Number(mm), 0).getDate() || 30;
+        }
+        const dailyEq = emp.monthlySalary / daysInMonth;
+        setBaseSalary(Math.round(dailyEq * d).toString());
+      } else if (emp.dailyWage) {
+        setBaseSalary((emp.dailyWage * d).toString());
       }
-    } else if (emp.dailyWage) {
-      setBaseSalary('0');
-      setDays('0');
     }
-  }, [emp, month]);
+  }, [defaultWorkingDays, isCustomized, emp, month]);
 
   const handleDaysChange = (val: string) => {
     setDays(val);
+    setIsCustomized(true);
+    if (onDaysChangedByUser && val) {
+      onDaysChangedByUser(val);
+    }
     const d = Number(val) || 0;
     if (emp.monthlySalary) {
-      const [yyyy, mm] = month.split('-');
-      const daysInMonth = new Date(Number(yyyy), Number(mm), 0).getDate();
+      const [yyyy, mm] = (month || '').split('-');
+      const daysInMonth = (yyyy && mm) ? new Date(Number(yyyy), Number(mm), 0).getDate() : 30;
       const dailyEq = emp.monthlySalary / daysInMonth;
       setBaseSalary(Math.round(dailyEq * d).toString());
     } else if (emp.dailyWage) {

@@ -37,7 +37,7 @@ export function SalesmanReport() {
       const tenantId = user?.tenantId || user?.uid;
       if (!tenantId) return;
 
-      const branchToQuery = activeBranchId || 'main';
+      const branchToQuery = activeBranchId || (branches.length > 0 ? branches[0].id : '');
 
       // 1. Fetch Salesmans
       let empQ: any = collection(db, 'salesmen');

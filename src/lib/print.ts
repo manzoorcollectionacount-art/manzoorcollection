@@ -72,9 +72,12 @@ export function printInvoice(elementId: string, title = 'Invoice', type: 'therma
           color: #000000 !important;
           page-break-inside: auto !important;
         }
-        #${elementId} * {
+        #${elementId}, #${elementId} * {
           -webkit-print-color-adjust: exact !important;
           print-color-adjust: exact !important;
+          color: #000000 !important;
+          -webkit-text-fill-color: #000000 !important;
+          border-color: #000000 !important;
         }
       }
     `;
@@ -98,10 +101,11 @@ export function printInvoice(elementId: string, title = 'Invoice', type: 'therma
           position: static !important;
           font-size: 11px !important;
         }
-        #root, main, .layout {
+        #root, main, .layout, div[class*="overflow"], div[class*="flex-1"] {
           display: block !important;
           height: auto !important;
           min-height: 0 !important;
+          max-height: none !important;
           overflow: visible !important;
           position: static !important;
           margin: 0 !important;
@@ -129,9 +133,12 @@ export function printInvoice(elementId: string, title = 'Invoice', type: 'therma
           color: #000000 !important;
           page-break-inside: auto !important;
         }
-        #${elementId} * {
+        #${elementId}, #${elementId} * {
           -webkit-print-color-adjust: exact !important;
           print-color-adjust: exact !important;
+          color: #000000 !important;
+          -webkit-text-fill-color: #000000 !important;
+          border-color: #000000 !important;
         }
         /* Keep tables repeating headers and breaking cleanly without orphan blank pages */
         table {

@@ -3,11 +3,12 @@ import { useBranch } from '../context/BranchContext';
 import { useAuth } from '../context/AuthContext';
 import { collection, query, where, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, getDocs, getDoc, runTransaction, writeBatch } from '../lib/customFirestore';
 import { db, safeGetDocs, safeCollectionSnapshot } from '../lib/firebase';
-import { BarChart3, Printer } from 'lucide-react';
+import { BarChart3, Printer, Boxes, Download, ArrowDownUp, Search, Filter, Layers } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { format, startOfWeek, parseISO, isWithinInterval, startOfDay, endOfDay, subDays, isValid } from 'date-fns';
 import { safeFormat } from '../lib/utils';
 import { printInvoice } from '../lib/print';
+import clsx from 'clsx';
 
 interface Sale {
   id: string;
@@ -19,8 +20,10 @@ interface Sale {
   returnedValue?: number;
   paymentMethod?: string;
   items: Array<{ id: string, name: string, qty: number, price: number, cost?: number, category?: string }>;
+  returnItems?: Array<{ id: string, name: string, qty: number, price: number, cost?: number, category?: string }>;
   createdAt: any;
-  date?: number;
+  date?: any;
+  invoiceNo?: string;
 }
 
 interface Purchase {
@@ -29,9 +32,11 @@ interface Purchase {
   vendorName?: string;
   vendorId?: string;
   total: number;
-  items: Array<{ id: string, name: string, qty: number, price: number }>;
+  items: Array<{ id: string, name: string, qty: number, price: number, cost?: number, sku?: string, category?: string }>;
   createdAt: any;
-  date?: number;
+  date?: any;
+  billNo?: string;
+  invoiceNo?: string;
 }
 
 interface Employee {
@@ -63,6 +68,7 @@ export function Reports() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [payslips, setPayslips] = useState<Payslip[]>([]);
   const [ledger, setLedger] = useState<any[]>([]);
+  const [transfers, setTransfers] = useState<any[]>([]);
 
   const [startDate, setStartDate] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
   const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
@@ -70,7 +76,14 @@ export function Reports() {
   const [selectedReportVendorName, setSelectedReportVendorName] = useState<string>('ALL');
   const [expandedAdvanceId, setExpandedAdvanceId] = useState<string | null>(null);
   const [advanceSearchTerm, setAdvanceSearchTerm] = useState('');
-  const [reportType, setReportType] = useState<'sales' | 'daily_sales' | 'detailed_sales' | 'detailed_purchases' | 'items' | 'categories' | 'payments' | 'customers' | 'vendors' | 'vendor_items' | 'profitability' | 'advances'>('sales');
+  
+  // Stock Movement Report state
+  const [stockMovementTypeFilter, setStockMovementTypeFilter] = useState<'all' | 'purchase' | 'sale' | 'transfer_in' | 'transfer_out' | 'return'>('all');
+  const [stockSearchTerm, setStockSearchTerm] = useState('');
+  const [stockCategoryFilter, setStockCategoryFilter] = useState('ALL');
+  const [stockViewMode, setStockViewMode] = useState<'ledger' | 'summary'>('ledger');
+
+  const [reportType, setReportType] = useState<'stock_movement' | 'sales' | 'daily_sales' | 'detailed_sales' | 'detailed_purchases' | 'items' | 'categories' | 'payments' | 'customers' | 'vendors' | 'vendor_items' | 'profitability' | 'advances'>('stock_movement');
 
   const getDocTimestamp = (doc: any): number => {
     if (!doc) return 0;
@@ -79,14 +92,25 @@ export function Reports() {
       const p = new Date(doc.date).getTime();
       if (!isNaN(p) && p > 0) return p;
     }
+    if (doc.date && typeof doc.date === 'object') {
+      if (typeof doc.date.toMillis === 'function') return doc.date.toMillis();
+      if (typeof doc.date.seconds === 'number') return doc.date.seconds * 1000;
+      if (typeof doc.date._seconds === 'number') return doc.date._seconds * 1000;
+    }
     if (doc.createdAt) {
       if (typeof doc.createdAt.toMillis === 'function') return doc.createdAt.toMillis();
       if (typeof doc.createdAt.seconds === 'number') return doc.createdAt.seconds * 1000;
+      if (typeof doc.createdAt._seconds === 'number') return doc.createdAt._seconds * 1000;
       if (typeof doc.createdAt === 'number') return doc.createdAt;
       if (typeof doc.createdAt === 'string') {
         const p = new Date(doc.createdAt).getTime();
         if (!isNaN(p) && p > 0) return p;
       }
+    }
+    if (doc.updatedAt) {
+      if (typeof doc.updatedAt.toMillis === 'function') return doc.updatedAt.toMillis();
+      if (typeof doc.updatedAt.seconds === 'number') return doc.updatedAt.seconds * 1000;
+      if (typeof doc.updatedAt === 'number') return doc.updatedAt;
     }
     return 0;
   };
@@ -94,27 +118,22 @@ export function Reports() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab') as any;
-    if (tab && ['sales', 'daily_sales', 'detailed_sales', 'detailed_purchases', 'items', 'categories', 'payments', 'customers', 'vendors', 'vendor_items', 'profitability', 'advances'].includes(tab)) {
+    if (tab && ['stock_movement', 'sales', 'daily_sales', 'detailed_sales', 'detailed_purchases', 'items', 'categories', 'payments', 'customers', 'vendors', 'vendor_items', 'profitability', 'advances'].includes(tab)) {
       setReportType(tab);
     }
   }, []);
 
   useEffect(() => {
-    let qSales: any = collection(db, 'sales');
-    let qPurchases: any = collection(db, 'purchases');
-    let qInventory: any = collection(db, 'inventory');
-    let qEmployees: any = collection(db, 'employees');
-    let qPayroll: any = collection(db, 'payroll');
-    let qLedger: any = collection(db, 'ledger');
+    const branchToUse = activeBranchId || (branches.length > 0 ? branches[0].id : '');
+    if (!branchToUse) return;
 
-    if (activeBranchId && activeBranchId !== 'all') {
-      qSales = query(qSales, where('branchId', '==', activeBranchId));
-      qPurchases = query(qPurchases, where('branchId', '==', activeBranchId));
-      qInventory = query(qInventory, where('branchId', '==', activeBranchId));
-      qEmployees = query(qEmployees, where('branchId', '==', activeBranchId));
-      qPayroll = query(qPayroll, where('branchId', '==', activeBranchId));
-      qLedger = query(qLedger, where('branchId', '==', activeBranchId));
-    }
+    let qSales = query(collection(db, 'sales'), where('branchId', '==', branchToUse));
+    let qPurchases = query(collection(db, 'purchases'), where('branchId', '==', branchToUse));
+    let qInventory = query(collection(db, 'inventory'), where('branchId', '==', branchToUse));
+    let qEmployees = query(collection(db, 'employees'), where('branchId', '==', branchToUse));
+    let qPayroll = query(collection(db, 'payroll'), where('branchId', '==', branchToUse));
+    let qLedger = query(collection(db, 'ledger'), where('branchId', '==', branchToUse));
+    let qTransfers = collection(db, 'stock_transfers');
 
     const unsubSales = safeCollectionSnapshot(qSales, (snap) => setSales(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as Sale))));
     const unsubPurchases = safeCollectionSnapshot(qPurchases, (snap) => setPurchases(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as Purchase))));
@@ -122,6 +141,7 @@ export function Reports() {
     const unsubEmployees = safeCollectionSnapshot(qEmployees, (snap) => setEmployees(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as Employee))));
     const unsubPayroll = safeCollectionSnapshot(qPayroll, (snap) => setPayslips(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as Payslip))));
     const unsubLedger = safeCollectionSnapshot(qLedger, (snap) => setLedger(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))));
+    const unsubTransfers = safeCollectionSnapshot(qTransfers, (snap) => setTransfers(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))));
     
     return () => {
       unsubSales();
@@ -130,8 +150,9 @@ export function Reports() {
       unsubEmployees();
       unsubPayroll();
       unsubLedger();
+      unsubTransfers();
     };
-  }, [user, activeBranchId]);
+  }, [user, activeBranchId, branches]);
 
   const reportData = () => {
     const startStr = format(startDate || new Date(), 'yyyy-MM-dd');
@@ -473,6 +494,313 @@ export function Reports() {
       return getVal(b) - getVal(a); 
     });
 
+    // --- INVENTORY STOCK MOVEMENT REPORT (IN / OUT / SALE / TRANSFER / PURCHASE) ---
+    const allMovements: Array<{
+      id: string;
+      date: number;
+      displayDate: string;
+      itemName: string;
+      sku: string;
+      category: string;
+      type: 'PURCHASE_IN' | 'SALE_OUT' | 'RETURN_IN' | 'TRANSFER_IN' | 'TRANSFER_OUT';
+      typeLabel: string;
+      badgeColor: string;
+      refNo: string;
+      party: string;
+      qtyIn: number;
+      qtyOut: number;
+      netQty: number;
+      rate: number;
+      totalValue: number;
+    }> = [];
+
+    const itemStockMap = new Map<string, {
+      itemName: string;
+      sku: string;
+      category: string;
+      currentStock: number;
+      purchasesInQty: number;
+      purchasesInVal: number;
+      transfersInQty: number;
+      transfersInVal: number;
+      returnsInQty: number;
+      returnsInVal: number;
+      totalInQty: number;
+      totalInVal: number;
+      salesOutQty: number;
+      salesOutVal: number;
+      transfersOutQty: number;
+      transfersOutVal: number;
+      totalOutQty: number;
+      totalOutVal: number;
+      netMovementQty: number;
+      netMovementVal: number;
+      cost: number;
+      price: number;
+      currentValuation: number;
+    }>();
+
+    const getItemRecord = (name: string, sku = '', category = '', cost = 0, price = 0) => {
+      const cleanName = (name || 'Unknown Item').trim();
+      const key = cleanName.toLowerCase();
+      if (!itemStockMap.has(key)) {
+        const invMatch = inventory.find(i => (i.name || '').trim().toLowerCase() === key || (sku && (i.sku || '').trim().toLowerCase() === sku.toLowerCase()));
+        const initialStock = Number(invMatch?.stock || 0);
+        const itemCost = Number(cost || invMatch?.cost || 0);
+        const itemPrice = Number(price || invMatch?.price || 0);
+        const itemCat = category || invMatch?.category || 'General';
+        const itemSku = sku || invMatch?.sku || '';
+
+        itemStockMap.set(key, {
+          itemName: cleanName,
+          sku: itemSku,
+          category: itemCat,
+          currentStock: initialStock,
+          purchasesInQty: 0,
+          purchasesInVal: 0,
+          transfersInQty: 0,
+          transfersInVal: 0,
+          returnsInQty: 0,
+          returnsInVal: 0,
+          totalInQty: 0,
+          totalInVal: 0,
+          salesOutQty: 0,
+          salesOutVal: 0,
+          transfersOutQty: 0,
+          transfersOutVal: 0,
+          totalOutQty: 0,
+          totalOutVal: 0,
+          netMovementQty: 0,
+          netMovementVal: 0,
+          cost: itemCost,
+          price: itemPrice,
+          currentValuation: initialStock * itemCost
+        });
+      }
+      return itemStockMap.get(key)!;
+    };
+
+    // Pre-populate inventory catalog items for branch
+    inventory.forEach(invItem => {
+      getItemRecord(invItem.name, invItem.sku, invItem.category, invItem.cost, invItem.price);
+    });
+
+    // 1. Purchases (IN)
+    filteredPurchases.forEach(p => {
+      const pTime = getDocTimestamp(p);
+      const dStr = pTime ? safeFormat(new Date(pTime), 'dd-MMM-yyyy hh:mm a') : '-';
+      const ref = p.invoiceNo || p.billNo || ('PUR-' + (p.id ? p.id.slice(0, 6) : ''));
+      const party = p.vendorName || 'Vendor';
+
+      (p.items || []).forEach((it: any, idx: number) => {
+        const qty = Number(it.qty || 0);
+        const rate = Number(it.price || it.cost || 0);
+        const val = qty * rate;
+        const iRec = getItemRecord(it.name, it.sku, it.category, rate, 0);
+
+        iRec.purchasesInQty += qty;
+        iRec.purchasesInVal += val;
+        iRec.totalInQty += qty;
+        iRec.totalInVal += val;
+        iRec.netMovementQty += qty;
+        iRec.netMovementVal += val;
+
+        allMovements.push({
+          id: `pur-${p.id}-${idx}`,
+          date: pTime,
+          displayDate: dStr,
+          itemName: it.name || 'Unknown Item',
+          sku: it.sku || iRec.sku || '-',
+          category: it.category || iRec.category || 'General',
+          type: 'PURCHASE_IN',
+          typeLabel: 'Purchase (IN)',
+          badgeColor: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800',
+          refNo: ref,
+          party: `Vendor: ${party}`,
+          qtyIn: qty,
+          qtyOut: 0,
+          netQty: qty,
+          rate,
+          totalValue: val
+        });
+      });
+    });
+
+    // 2. Sales (OUT) & Returns (IN)
+    filteredSales.forEach(s => {
+      const sTime = getDocTimestamp(s);
+      const dStr = sTime ? safeFormat(new Date(sTime), 'dd-MMM-yyyy hh:mm a') : '-';
+      const ref = s.invoiceNo || ('BILL-' + (s.id ? s.id.slice(0, 6) : ''));
+      const party = s.customerName || 'Walk-in Customer';
+
+      (s.items || []).forEach((it: any, idx: number) => {
+        const qty = Number(it.qty || 0);
+        const rate = Number(it.price || 0);
+        const val = qty * rate;
+        const iRec = getItemRecord(it.name, it.sku, it.category, it.cost, rate);
+
+        iRec.salesOutQty += qty;
+        iRec.salesOutVal += val;
+        iRec.totalOutQty += qty;
+        iRec.totalOutVal += val;
+        iRec.netMovementQty -= qty;
+        iRec.netMovementVal -= val;
+
+        allMovements.push({
+          id: `sale-${s.id}-${idx}`,
+          date: sTime,
+          displayDate: dStr,
+          itemName: it.name || 'Unknown Item',
+          sku: it.sku || iRec.sku || '-',
+          category: it.category || iRec.category || 'General',
+          type: 'SALE_OUT',
+          typeLabel: 'Sale (OUT)',
+          badgeColor: 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-300 dark:border-rose-800',
+          refNo: ref,
+          party: `Customer: ${party}`,
+          qtyIn: 0,
+          qtyOut: qty,
+          netQty: -qty,
+          rate,
+          totalValue: val
+        });
+      });
+
+      (s.returnItems || []).forEach((it: any, idx: number) => {
+        const qty = Number(it.qty || 0);
+        const rate = Number(it.price || 0);
+        const val = qty * rate;
+        const iRec = getItemRecord(it.name, it.sku, it.category, it.cost, rate);
+
+        iRec.returnsInQty += qty;
+        iRec.returnsInVal += val;
+        iRec.totalInQty += qty;
+        iRec.totalInVal += val;
+        iRec.netMovementQty += qty;
+        iRec.netMovementVal += val;
+
+        allMovements.push({
+          id: `ret-${s.id}-${idx}`,
+          date: sTime,
+          displayDate: dStr,
+          itemName: it.name || 'Unknown Item',
+          sku: it.sku || iRec.sku || '-',
+          category: it.category || iRec.category || 'General',
+          type: 'RETURN_IN',
+          typeLabel: 'Return (IN)',
+          badgeColor: 'bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300 border border-sky-300 dark:border-sky-800',
+          refNo: ref + ' (Ret)',
+          party: `Customer: ${party}`,
+          qtyIn: qty,
+          qtyOut: 0,
+          netQty: qty,
+          rate,
+          totalValue: val
+        });
+      });
+    });
+
+    // 3. Stock Transfers (Transfer OUT & Transfer IN)
+    const activeBranchToUse = activeBranchId || (branches.length > 0 ? branches[0].id : '');
+    transfers.forEach(t => {
+      const tTime = getDocTimestamp(t);
+      if (!tTime || tTime < start.getTime() || tTime > end.getTime()) return;
+      const dStr = safeFormat(new Date(tTime), 'dd-MMM-yyyy hh:mm a');
+      const ref = t.transferNo || ('TRF-' + (t.id ? t.id.slice(0, 6) : ''));
+
+      // Transfer OUT
+      if (t.fromBranchId === activeBranchToUse) {
+        const destName = t.toBranchName || branches.find(b => b.id === t.toBranchId)?.name || 'Other Branch';
+        (t.items || []).forEach((it: any, idx: number) => {
+          const qty = Number(it.qty || 0);
+          const rate = Number(it.cost || it.price || 0);
+          const val = qty * rate;
+          const iRec = getItemRecord(it.name, it.sku, it.category, rate, 0);
+
+          iRec.transfersOutQty += qty;
+          iRec.transfersOutVal += val;
+          iRec.totalOutQty += qty;
+          iRec.totalOutVal += val;
+          iRec.netMovementQty -= qty;
+          iRec.netMovementVal -= val;
+
+          allMovements.push({
+            id: `trf-out-${t.id}-${idx}`,
+            date: tTime,
+            displayDate: dStr,
+            itemName: it.name || 'Unknown Item',
+            sku: it.sku || iRec.sku || '-',
+            category: it.category || iRec.category || 'General',
+            type: 'TRANSFER_OUT',
+            typeLabel: 'Transfer OUT',
+            badgeColor: 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-800',
+            refNo: ref,
+            party: `To: ${destName}`,
+            qtyIn: 0,
+            qtyOut: qty,
+            netQty: -qty,
+            rate,
+            totalValue: val
+          });
+        });
+      }
+
+      // Transfer IN
+      if (t.toBranchId === activeBranchToUse) {
+        const srcName = t.fromBranchName || branches.find(b => b.id === t.fromBranchId)?.name || 'Other Branch';
+        (t.items || []).forEach((it: any, idx: number) => {
+          const qty = Number(it.qty || 0);
+          const rate = Number(it.cost || it.price || 0);
+          const val = qty * rate;
+          const iRec = getItemRecord(it.name, it.sku, it.category, rate, 0);
+
+          iRec.transfersInQty += qty;
+          iRec.transfersInVal += val;
+          iRec.totalInQty += qty;
+          iRec.totalInVal += val;
+          iRec.netMovementQty += qty;
+          iRec.netMovementVal += val;
+
+          allMovements.push({
+            id: `trf-in-${t.id}-${idx}`,
+            date: tTime,
+            displayDate: dStr,
+            itemName: it.name || 'Unknown Item',
+            sku: it.sku || iRec.sku || '-',
+            category: it.category || iRec.category || 'General',
+            type: 'TRANSFER_IN',
+            typeLabel: 'Transfer IN',
+            badgeColor: 'bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-300 dark:border-purple-800',
+            refNo: ref,
+            party: `From: ${srcName}`,
+            qtyIn: qty,
+            qtyOut: 0,
+            netQty: qty,
+            rate,
+            totalValue: val
+          });
+        });
+      }
+    });
+
+    allMovements.sort((a, b) => b.date - a.date);
+
+    const totalStockInQty = allMovements.reduce((acc, m) => acc + m.qtyIn, 0);
+    const totalStockInValue = allMovements.reduce((acc, m) => acc + (m.qtyIn > 0 ? m.totalValue : 0), 0);
+    const totalStockOutQty = allMovements.reduce((acc, m) => acc + m.qtyOut, 0);
+    const totalStockOutValue = allMovements.reduce((acc, m) => acc + (m.qtyOut > 0 ? m.totalValue : 0), 0);
+    const netMovementQty = totalStockInQty - totalStockOutQty;
+    const currentBranchStockTotal = inventory.reduce((acc, i) => acc + Number(i.stock || 0), 0);
+    const currentBranchStockValuation = inventory.reduce((acc, i) => acc + (Number(i.stock || 0) * Number(i.cost || 0)), 0);
+
+    const itemSummaryList = Array.from(itemStockMap.values()).sort((a, b) => {
+      const aAct = Math.abs(a.netMovementQty) + a.currentStock;
+      const bAct = Math.abs(b.netMovementQty) + b.currentStock;
+      return bAct - aAct;
+    });
+
+    const stockCategories = Array.from(new Set(itemSummaryList.map(i => i.category || 'General'))).sort();
+
     return { 
       detailedSales,
       detailedPurchases,
@@ -490,11 +818,54 @@ export function Reports() {
       allPurchasesVendors,
       profitabilityReport,
       categoriesReport,
-      paymentsReport
+      paymentsReport,
+      // Stock Movement Unified Report data
+      stockMovement: {
+        allMovements,
+        itemSummaryList,
+        stockCategories,
+        totalStockInQty,
+        totalStockInValue,
+        totalStockOutQty,
+        totalStockOutValue,
+        netMovementQty,
+        currentBranchStockTotal,
+        currentBranchStockValuation
+      }
     };
   };
 
   const reports = reportData();
+
+  const exportStockMovementCSV = () => {
+    const movements = reports.stockMovement.allMovements;
+    if (!movements || movements.length === 0) return;
+    const headers = ['Date', 'Item Name', 'SKU', 'Category', 'Movement Type', 'Reference / Bill #', 'Party / Branch', 'Rate (PKR)', 'Qty IN', 'Qty OUT', 'Net Qty', 'Total Value (PKR)'];
+    const rows = movements.map(m => [
+      `"${m.displayDate}"`,
+      `"${(m.itemName || '').replace(/"/g, '""')}"`,
+      `"${m.sku || ''}"`,
+      `"${m.category || ''}"`,
+      `"${m.typeLabel}"`,
+      `"${m.refNo || ''}"`,
+      `"${(m.party || '').replace(/"/g, '""')}"`,
+      m.rate || 0,
+      m.qtyIn || 0,
+      m.qtyOut || 0,
+      m.netQty || 0,
+      m.totalValue || 0
+    ]);
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const bName = (branches.find(b => b.id === activeBranchId)?.name || 'branch').replace(/[^a-zA-Z0-9]/g, '_');
+    link.setAttribute('download', `Inventory_Stock_Report_${bName}_${startDate}_to_${endDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   return (
     <div className="space-y-6">
@@ -503,46 +874,112 @@ export function Reports() {
           <BarChart3 className="w-6 h-6 mr-3 text-sky-600" />
           Analytics & Reports
         </h2>
-        <button onClick={() => printInvoice('report-print-content', 'Sales Report', 'a4')} className="flex items-center px-4 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-md hover:bg-slate-50 dark:hover:bg-slate-800/50 transition shadow-sm">
-          <Printer className="w-5 h-5 mr-2" /> Print
-        </button>
+        <div className="flex items-center gap-3">
+          {reportType === 'stock_movement' && (
+            <button 
+              onClick={exportStockMovementCSV} 
+              className="flex items-center px-3.5 py-2 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 rounded-md hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition shadow-sm font-medium text-xs sm:text-sm cursor-pointer"
+            >
+              <Download className="w-4 h-4 mr-1.5" /> Export CSV
+            </button>
+          )}
+          <button 
+            onClick={() => printInvoice('report-print-content', reportType === 'stock_movement' ? 'Inventory Stock Report' : 'Sales Report', 'a4')} 
+            className="flex items-center px-4 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-md hover:bg-slate-50 dark:hover:bg-slate-800/50 transition shadow-sm font-medium text-xs sm:text-sm cursor-pointer"
+          >
+            <Printer className="w-4 h-4 mr-1.5" /> Print
+          </button>
+        </div>
       </div>
 
       <div className="card p-4 flex flex-wrap gap-4 items-end bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 print:hidden">
         <div>
-          <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1">Branch</label>
-          <select 
-            value={activeBranchId || 'all'} 
-            onChange={(e) => setActiveBranchId(e.target.value === 'all' ? null : e.target.value)} 
-            className="text-sm font-semibold border border-slate-300 dark:border-slate-600 rounded px-2.5 py-1.5 bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400"
-          >
-            <option value="all">All Branches (Overall)</option>
-            <option value="main">Main Branch (HQ)</option>
-            {branches.map(b => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1">Start Date</label>
+          <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1 font-bold">Start Date</label>
           <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="text-sm border border-slate-300 dark:border-slate-600 rounded px-2 py-1.5 bg-white dark:bg-slate-900" />
         </div>
         <div>
-          <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1">End Date</label>
+          <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1 font-bold">End Date</label>
           <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="text-sm border border-slate-300 dark:border-slate-600 rounded px-2 py-1.5 bg-white dark:bg-slate-900" />
         </div>
-        <div>
-          <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1">Group By</label>
-          <select value={aggregation} onChange={(e: any) => setAggregation(e.target.value)} className="text-sm border border-slate-300 dark:border-slate-600 rounded px-2 py-1.5 bg-white dark:bg-slate-900">
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-            <option value="yearly">Yearly</option>
-          </select>
-        </div>
+
+        {reportType === 'stock_movement' ? (
+          <>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1 font-bold">View Mode</label>
+              <div className="flex rounded border border-slate-300 dark:border-slate-600 overflow-hidden bg-white dark:bg-slate-900">
+                <button
+                  type="button"
+                  onClick={() => setStockViewMode('ledger')}
+                  className={clsx("px-3 py-1.5 text-xs font-semibold transition cursor-pointer", stockViewMode === 'ledger' ? "bg-sky-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800")}
+                >
+                  Movements Ledger
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStockViewMode('summary')}
+                  className={clsx("px-3 py-1.5 text-xs font-semibold transition cursor-pointer", stockViewMode === 'summary' ? "bg-sky-600 text-white" : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800")}
+                >
+                  Item Summary
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1 font-bold">Movement Type</label>
+              <select
+                value={stockMovementTypeFilter}
+                onChange={(e: any) => setStockMovementTypeFilter(e.target.value)}
+                className="text-sm border border-slate-300 dark:border-slate-600 rounded px-2.5 py-1.5 bg-white dark:bg-slate-900 font-medium"
+              >
+                <option value="all">All Movements (In & Out)</option>
+                <option value="purchase">Purchases Only (IN)</option>
+                <option value="sale">Sales Only (OUT)</option>
+                <option value="transfer_in">Transfers IN (Received)</option>
+                <option value="transfer_out">Transfers OUT (Sent)</option>
+                <option value="return">Customer Returns (IN)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1 font-bold">Category</label>
+              <select
+                value={stockCategoryFilter}
+                onChange={(e) => setStockCategoryFilter(e.target.value)}
+                className="text-sm border border-slate-300 dark:border-slate-600 rounded px-2.5 py-1.5 bg-white dark:bg-slate-900"
+              >
+                <option value="ALL">All Categories</option>
+                {reports.stockMovement.stockCategories.map((c, i) => (
+                  <option key={i} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1 font-bold">Search Item / SKU</label>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Item name, SKU, bill #..."
+                  value={stockSearchTerm}
+                  onChange={(e) => setStockSearchTerm(e.target.value)}
+                  className="text-sm border border-slate-300 dark:border-slate-600 rounded pl-8 pr-2.5 py-1.5 bg-white dark:bg-slate-900 w-full md:w-56"
+                />
+              </div>
+            </div>
+          </>
+        ) : (
+          <div>
+            <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1 font-bold">Group By</label>
+            <select value={aggregation} onChange={(e: any) => setAggregation(e.target.value)} className="text-sm border border-slate-300 dark:border-slate-600 rounded px-2 py-1.5 bg-white dark:bg-slate-900">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+            </select>
+          </div>
+        )}
+
         {reportType === 'vendor_items' && (
           <div>
-            <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1">Select Vendor</label>
+            <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1 font-bold">Select Vendor</label>
             <select value={selectedReportVendorName} onChange={(e: any) => setSelectedReportVendorName(e.target.value)} className="text-sm border border-slate-300 dark:border-slate-600 rounded px-2 py-1.5 bg-white dark:bg-slate-900">
               <option value="ALL">All Vendors</option>
               {reports.allPurchasesVendors.map((v, i) => (
@@ -553,7 +990,7 @@ export function Reports() {
         )}
         {reportType === 'advances' && (
           <div>
-            <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1">Search Employee</label>
+            <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1 font-bold">Search Employee</label>
             <input 
               type="text" 
               placeholder="Enter name..."
@@ -567,14 +1004,16 @@ export function Reports() {
       </div>
 
       <div className="flex border-b border-slate-200 dark:border-slate-700 print:hidden overflow-x-auto">
-        {( ['sales', 'daily_sales', 'detailed_sales', 'detailed_purchases', 'items', 'categories', 'payments', 'customers', 'vendors', 'vendor_items', 'profitability', 'advances'] as const).map(type => (
+        {( ['stock_movement', 'sales', 'daily_sales', 'detailed_sales', 'detailed_purchases', 'items', 'categories', 'payments', 'customers', 'vendors', 'vendor_items', 'profitability', 'advances'] as const).map(type => (
           <button 
             key={type}
             onClick={() => setReportType(type)}
-            className={`px-4 py-3 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
-              reportType === type ? 'border-sky-500 text-sky-600' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 hover:border-slate-300'
+            className={`px-4 py-3 border-b-2 font-medium text-sm transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              reportType === type ? 'border-sky-500 text-sky-600 font-bold' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 hover:border-slate-300'
             }`}
           >
+            {type === 'stock_movement' && <Boxes className="w-4 h-4 text-emerald-600" />}
+            {type === 'stock_movement' && 'Stock Movement (In/Out)'}
             {type === 'sales' && 'Sales Overview'}
             {type === 'daily_sales' && 'Daily Sales Report'}
             {type === 'detailed_sales' && 'Detailed Sales (Bills)'}
@@ -594,11 +1033,10 @@ export function Reports() {
       <div id="report-print-content" className="space-y-6 print:space-y-4 print:bg-white print:p-0 print:w-full print:static print:z-auto print:h-auto">
         <div className="hidden print:block text-center border-b border-slate-200 dark:border-slate-700 pb-4 mb-4">
           <h1 className="text-2xl font-bold font-serif uppercase tracking-widest text-slate-900 dark:text-slate-50">
-             {!activeBranchId || activeBranchId === 'all'
-               ? 'All Branches (Overall)'
-               : (activeBranchId === 'main' ? 'Main Branch (HQ)' : (branches.find(b => b.id === activeBranchId)?.name || activeBranchId))}
+             {branches.find(b => b.id === activeBranchId)?.name || 'Manzoor Collection'}
           </h1>
           <h2 className="text-lg font-bold text-slate-700 dark:text-slate-200 mt-1 uppercase tracking-widest">
+            {reportType === 'stock_movement' && 'Inventory Stock Movement (In / Out / Transfers) Report'}
             {reportType === 'sales' && 'Sales Report'}
             {reportType === 'daily_sales' && 'Daily Sales Report'}
             {reportType === 'detailed_sales' && 'Detailed Sales (Bills)'}
@@ -615,6 +1053,357 @@ export function Reports() {
           </h2>
           <p className="text-xs text-slate-400 mt-2">Printed on {new Date().toLocaleString()}</p>
         </div>
+
+        {reportType === 'stock_movement' && (
+          <div className="space-y-6">
+            {/* KPI Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4">
+              <div className="card p-3 md:p-4 border-l-4 border-l-emerald-500">
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1 font-semibold">Total Stock IN</div>
+                <div className="text-lg md:text-2xl font-bold tracking-tight text-emerald-600 font-mono">
+                  +{reports.stockMovement.totalStockInQty.toLocaleString()} <span className="text-xs font-normal text-slate-400">units</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1 font-mono">
+                  PKR {reports.stockMovement.totalStockInValue.toLocaleString()}
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Purchases + Transfers IN + Returns</div>
+              </div>
+
+              <div className="card p-3 md:p-4 border-l-4 border-l-rose-500">
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1 font-semibold">Total Stock OUT</div>
+                <div className="text-lg md:text-2xl font-bold tracking-tight text-rose-600 font-mono">
+                  -{reports.stockMovement.totalStockOutQty.toLocaleString()} <span className="text-xs font-normal text-slate-400">units</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1 font-mono">
+                  PKR {reports.stockMovement.totalStockOutValue.toLocaleString()}
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Sales + Transfers OUT</div>
+              </div>
+
+              <div className="card p-3 md:p-4 border-l-4 border-l-sky-500">
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1 font-semibold">Net Movement</div>
+                <div className={clsx(
+                  "text-lg md:text-2xl font-bold tracking-tight font-mono",
+                  reports.stockMovement.netMovementQty >= 0 ? "text-sky-600" : "text-amber-600"
+                )}>
+                  {reports.stockMovement.netMovementQty > 0 ? `+${reports.stockMovement.netMovementQty.toLocaleString()}` : reports.stockMovement.netMovementQty.toLocaleString()} <span className="text-xs font-normal text-slate-400">units</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1 font-mono">
+                  Net = In &minus; Out
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Over selected period</div>
+              </div>
+
+              <div className="card p-3 md:p-4 border-l-4 border-l-indigo-500">
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1 font-semibold">Current On-Hand Stock</div>
+                <div className="text-lg md:text-2xl font-bold tracking-tight text-indigo-600 font-mono">
+                  {reports.stockMovement.currentBranchStockTotal.toLocaleString()} <span className="text-xs font-normal text-slate-400">units</span>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1 font-mono">
+                  Branch Inventory Total
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">{branches.find(b => b.id === activeBranchId)?.name || 'Active Branch'}</div>
+              </div>
+
+              <div className="card p-3 md:p-4 border-l-4 border-l-purple-500 col-span-2 md:col-span-1">
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1 font-semibold">Inventory Valuation</div>
+                <div className="text-lg md:text-2xl font-bold tracking-tight text-purple-600 font-mono">
+                  PKR {reports.stockMovement.currentBranchStockValuation.toLocaleString()}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1 font-mono">
+                  Based on cost price
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Current Stock &times; Cost</div>
+              </div>
+            </div>
+
+            {/* Content Table: Ledger View or Summary View */}
+            {stockViewMode === 'ledger' ? (
+              <div className="card overflow-hidden">
+                <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex flex-wrap justify-between items-center gap-2 bg-slate-50 dark:bg-slate-800/50">
+                  <div className="flex items-center gap-2">
+                    <Boxes className="w-5 h-5 text-sky-600" />
+                    <h3 className="font-bold text-slate-800 dark:text-slate-100 text-sm">
+                      Stock Movement Ledger &mdash; All In/Out Entries
+                    </h3>
+                  </div>
+                  <span className="text-xs text-slate-500 font-mono">
+                    Showing {reports.stockMovement.allMovements.filter(m => {
+                      if (stockMovementTypeFilter === 'purchase' && m.type !== 'PURCHASE_IN') return false;
+                      if (stockMovementTypeFilter === 'sale' && m.type !== 'SALE_OUT') return false;
+                      if (stockMovementTypeFilter === 'transfer_in' && m.type !== 'TRANSFER_IN') return false;
+                      if (stockMovementTypeFilter === 'transfer_out' && m.type !== 'TRANSFER_OUT') return false;
+                      if (stockMovementTypeFilter === 'return' && m.type !== 'RETURN_IN') return false;
+                      if (stockCategoryFilter !== 'ALL' && m.category !== stockCategoryFilter) return false;
+                      if (stockSearchTerm.trim()) {
+                        const term = stockSearchTerm.toLowerCase();
+                        if (!m.itemName.toLowerCase().includes(term) && !m.sku.toLowerCase().includes(term) && !m.refNo.toLowerCase().includes(term) && !m.party.toLowerCase().includes(term)) return false;
+                      }
+                      return true;
+                    }).length} transactions
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 uppercase font-semibold border-b border-slate-200 dark:border-slate-700">
+                      <tr>
+                        <th className="py-3 px-3">Date & Time</th>
+                        <th className="py-3 px-3">Item Details</th>
+                        <th className="py-3 px-2">Category</th>
+                        <th className="py-3 px-2">Type / Activity</th>
+                        <th className="py-3 px-2">Bill / Ref #</th>
+                        <th className="py-3 px-3">Party / Transfer Info</th>
+                        <th className="py-3 px-2 text-right">Rate</th>
+                        <th className="py-3 px-2 text-right text-emerald-600 font-bold">Qty IN (+)</th>
+                        <th className="py-3 px-2 text-right text-rose-600 font-bold">Qty OUT (&minus;)</th>
+                        <th className="py-3 px-3 text-right">Total (PKR)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                      {reports.stockMovement.allMovements
+                        .filter(m => {
+                          if (stockMovementTypeFilter === 'purchase' && m.type !== 'PURCHASE_IN') return false;
+                          if (stockMovementTypeFilter === 'sale' && m.type !== 'SALE_OUT') return false;
+                          if (stockMovementTypeFilter === 'transfer_in' && m.type !== 'TRANSFER_IN') return false;
+                          if (stockMovementTypeFilter === 'transfer_out' && m.type !== 'TRANSFER_OUT') return false;
+                          if (stockMovementTypeFilter === 'return' && m.type !== 'RETURN_IN') return false;
+                          if (stockCategoryFilter !== 'ALL' && m.category !== stockCategoryFilter) return false;
+                          if (stockSearchTerm.trim()) {
+                            const term = stockSearchTerm.toLowerCase();
+                            if (!m.itemName.toLowerCase().includes(term) && !m.sku.toLowerCase().includes(term) && !m.refNo.toLowerCase().includes(term) && !m.party.toLowerCase().includes(term)) return false;
+                          }
+                          return true;
+                        })
+                        .map(m => (
+                          <tr key={m.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition">
+                            <td className="py-2.5 px-3 whitespace-nowrap text-slate-500 font-mono text-[11px]">{m.displayDate}</td>
+                            <td className="py-2.5 px-3">
+                              <div className="font-semibold text-slate-800 dark:text-slate-100">{m.itemName}</div>
+                              {m.sku && m.sku !== '-' && <div className="text-[10px] text-slate-400 font-mono">SKU: {m.sku}</div>}
+                            </td>
+                            <td className="py-2.5 px-2 text-slate-500">{m.category}</td>
+                            <td className="py-2.5 px-2 whitespace-nowrap">
+                              <span className={clsx("inline-block px-2 py-0.5 rounded text-[10px] font-bold tracking-wide uppercase", m.badgeColor)}>
+                                {m.typeLabel}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-2 font-mono font-medium text-slate-700 dark:text-slate-300 text-[11px]">{m.refNo}</td>
+                            <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">{m.party}</td>
+                            <td className="py-2.5 px-2 text-right font-mono text-slate-600 dark:text-slate-400">{m.rate ? m.rate.toLocaleString() : '-'}</td>
+                            <td className="py-2.5 px-2 text-right font-mono font-bold text-emerald-600">
+                              {m.qtyIn > 0 ? `+${m.qtyIn}` : '-'}
+                            </td>
+                            <td className="py-2.5 px-2 text-right font-mono font-bold text-rose-600">
+                              {m.qtyOut > 0 ? `-${m.qtyOut}` : '-'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-800 dark:text-slate-100">
+                              PKR {m.totalValue.toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+
+                      {reports.stockMovement.allMovements.filter(m => {
+                        if (stockMovementTypeFilter === 'purchase' && m.type !== 'PURCHASE_IN') return false;
+                        if (stockMovementTypeFilter === 'sale' && m.type !== 'SALE_OUT') return false;
+                        if (stockMovementTypeFilter === 'transfer_in' && m.type !== 'TRANSFER_IN') return false;
+                        if (stockMovementTypeFilter === 'transfer_out' && m.type !== 'TRANSFER_OUT') return false;
+                        if (stockMovementTypeFilter === 'return' && m.type !== 'RETURN_IN') return false;
+                        if (stockCategoryFilter !== 'ALL' && m.category !== stockCategoryFilter) return false;
+                        if (stockSearchTerm.trim()) {
+                          const term = stockSearchTerm.toLowerCase();
+                          if (!m.itemName.toLowerCase().includes(term) && !m.sku.toLowerCase().includes(term) && !m.refNo.toLowerCase().includes(term) && !m.party.toLowerCase().includes(term)) return false;
+                        }
+                        return true;
+                      }).length === 0 && (
+                        <tr>
+                          <td colSpan={10} className="py-8 text-center text-slate-400">
+                            No stock movements found matching the selected filters.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                    <tfoot className="bg-slate-50 dark:bg-slate-800/70 font-bold border-t-2 border-slate-300 dark:border-slate-700">
+                      <tr>
+                        <td colSpan={7} className="py-3 px-3 text-right uppercase text-[10px] tracking-wider text-slate-700 dark:text-slate-300">
+                          Period Movement Total
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono text-emerald-600 text-sm">
+                          +{reports.stockMovement.allMovements
+                            .filter(m => {
+                              if (stockMovementTypeFilter === 'purchase' && m.type !== 'PURCHASE_IN') return false;
+                              if (stockMovementTypeFilter === 'sale' && m.type !== 'SALE_OUT') return false;
+                              if (stockMovementTypeFilter === 'transfer_in' && m.type !== 'TRANSFER_IN') return false;
+                              if (stockMovementTypeFilter === 'transfer_out' && m.type !== 'TRANSFER_OUT') return false;
+                              if (stockMovementTypeFilter === 'return' && m.type !== 'RETURN_IN') return false;
+                              if (stockCategoryFilter !== 'ALL' && m.category !== stockCategoryFilter) return false;
+                              if (stockSearchTerm.trim()) {
+                                const term = stockSearchTerm.toLowerCase();
+                                if (!m.itemName.toLowerCase().includes(term) && !m.sku.toLowerCase().includes(term) && !m.refNo.toLowerCase().includes(term) && !m.party.toLowerCase().includes(term)) return false;
+                              }
+                              return true;
+                            })
+                            .reduce((sum, m) => sum + m.qtyIn, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono text-rose-600 text-sm">
+                          -{reports.stockMovement.allMovements
+                            .filter(m => {
+                              if (stockMovementTypeFilter === 'purchase' && m.type !== 'PURCHASE_IN') return false;
+                              if (stockMovementTypeFilter === 'sale' && m.type !== 'SALE_OUT') return false;
+                              if (stockMovementTypeFilter === 'transfer_in' && m.type !== 'TRANSFER_IN') return false;
+                              if (stockMovementTypeFilter === 'transfer_out' && m.type !== 'TRANSFER_OUT') return false;
+                              if (stockMovementTypeFilter === 'return' && m.type !== 'RETURN_IN') return false;
+                              if (stockCategoryFilter !== 'ALL' && m.category !== stockCategoryFilter) return false;
+                              if (stockSearchTerm.trim()) {
+                                const term = stockSearchTerm.toLowerCase();
+                                if (!m.itemName.toLowerCase().includes(term) && !m.sku.toLowerCase().includes(term) && !m.refNo.toLowerCase().includes(term) && !m.party.toLowerCase().includes(term)) return false;
+                              }
+                              return true;
+                            })
+                            .reduce((sum, m) => sum + m.qtyOut, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono text-sky-700 dark:text-sky-300 text-sm">
+                          PKR {reports.stockMovement.allMovements
+                            .filter(m => {
+                              if (stockMovementTypeFilter === 'purchase' && m.type !== 'PURCHASE_IN') return false;
+                              if (stockMovementTypeFilter === 'sale' && m.type !== 'SALE_OUT') return false;
+                              if (stockMovementTypeFilter === 'transfer_in' && m.type !== 'TRANSFER_IN') return false;
+                              if (stockMovementTypeFilter === 'transfer_out' && m.type !== 'TRANSFER_OUT') return false;
+                              if (stockMovementTypeFilter === 'return' && m.type !== 'RETURN_IN') return false;
+                              if (stockCategoryFilter !== 'ALL' && m.category !== stockCategoryFilter) return false;
+                              if (stockSearchTerm.trim()) {
+                                const term = stockSearchTerm.toLowerCase();
+                                if (!m.itemName.toLowerCase().includes(term) && !m.sku.toLowerCase().includes(term) && !m.refNo.toLowerCase().includes(term) && !m.party.toLowerCase().includes(term)) return false;
+                              }
+                              return true;
+                            })
+                            .reduce((sum, m) => sum + m.totalValue, 0).toLocaleString()}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              /* Item-Wise Stock Summary Table */
+              <div className="card overflow-hidden">
+                <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex flex-wrap justify-between items-center gap-2 bg-slate-50 dark:bg-slate-800/50">
+                  <div className="flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-indigo-600" />
+                    <h3 className="font-bold text-slate-800 dark:text-slate-100 text-sm">
+                      Item-Wise Consolidated Stock Movement Summary
+                    </h3>
+                  </div>
+                  <span className="text-xs text-slate-500 font-mono">
+                    {reports.stockMovement.itemSummaryList.filter(item => {
+                      if (stockCategoryFilter !== 'ALL' && item.category !== stockCategoryFilter) return false;
+                      if (stockSearchTerm.trim()) {
+                        const term = stockSearchTerm.toLowerCase();
+                        if (!item.itemName.toLowerCase().includes(term) && !item.sku.toLowerCase().includes(term)) return false;
+                      }
+                      return true;
+                    }).length} items listed
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 uppercase font-semibold border-b border-slate-200 dark:border-slate-700">
+                      <tr>
+                        <th className="py-3 px-3">Item Name</th>
+                        <th className="py-3 px-2">SKU</th>
+                        <th className="py-3 px-2">Category</th>
+                        <th className="py-3 px-2 text-right">Current Stock</th>
+                        <th className="py-3 px-2 text-right text-emerald-600">Purchases (IN)</th>
+                        <th className="py-3 px-2 text-right text-purple-600">Transfers IN</th>
+                        <th className="py-3 px-2 text-right text-sky-600">Returns (IN)</th>
+                        <th className="py-3 px-2 text-right text-emerald-700 font-bold bg-emerald-50/50 dark:bg-emerald-950/20">Total IN</th>
+                        <th className="py-3 px-2 text-right text-rose-600">Sales (OUT)</th>
+                        <th className="py-3 px-2 text-right text-amber-600">Transfers OUT</th>
+                        <th className="py-3 px-2 text-right text-rose-700 font-bold bg-rose-50/50 dark:bg-rose-950/20">Total OUT</th>
+                        <th className="py-3 px-2 text-right font-bold">Net Movement</th>
+                        <th className="py-3 px-3 text-right">Stock Valuation</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                      {reports.stockMovement.itemSummaryList
+                        .filter(item => {
+                          if (stockCategoryFilter !== 'ALL' && item.category !== stockCategoryFilter) return false;
+                          if (stockSearchTerm.trim()) {
+                            const term = stockSearchTerm.toLowerCase();
+                            if (!item.itemName.toLowerCase().includes(term) && !item.sku.toLowerCase().includes(term)) return false;
+                          }
+                          return true;
+                        })
+                        .map((item, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition">
+                            <td className="py-2.5 px-3 font-semibold text-slate-800 dark:text-slate-100">{item.itemName}</td>
+                            <td className="py-2.5 px-2 font-mono text-[11px] text-slate-400">{item.sku || '-'}</td>
+                            <td className="py-2.5 px-2 text-slate-500">{item.category}</td>
+                            <td className="py-2.5 px-2 text-right font-mono font-bold text-indigo-600">{item.currentStock.toLocaleString()}</td>
+                            <td className="py-2.5 px-2 text-right font-mono text-emerald-600">{item.purchasesInQty > 0 ? `+${item.purchasesInQty}` : '-'}</td>
+                            <td className="py-2.5 px-2 text-right font-mono text-purple-600">{item.transfersInQty > 0 ? `+${item.transfersInQty}` : '-'}</td>
+                            <td className="py-2.5 px-2 text-right font-mono text-sky-600">{item.returnsInQty > 0 ? `+${item.returnsInQty}` : '-'}</td>
+                            <td className="py-2.5 px-2 text-right font-mono font-bold text-emerald-700 bg-emerald-50/30 dark:bg-emerald-950/10">
+                              {item.totalInQty > 0 ? `+${item.totalInQty}` : '0'}
+                            </td>
+                            <td className="py-2.5 px-2 text-right font-mono text-rose-600">{item.salesOutQty > 0 ? `-${item.salesOutQty}` : '-'}</td>
+                            <td className="py-2.5 px-2 text-right font-mono text-amber-600">{item.transfersOutQty > 0 ? `-${item.transfersOutQty}` : '-'}</td>
+                            <td className="py-2.5 px-2 text-right font-mono font-bold text-rose-700 bg-rose-50/30 dark:bg-rose-950/10">
+                              {item.totalOutQty > 0 ? `-${item.totalOutQty}` : '0'}
+                            </td>
+                            <td className={clsx("py-2.5 px-2 text-right font-mono font-bold", item.netMovementQty >= 0 ? "text-sky-600" : "text-amber-600")}>
+                              {item.netMovementQty > 0 ? `+${item.netMovementQty}` : item.netMovementQty}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono text-slate-700 dark:text-slate-300">
+                              PKR {item.currentValuation.toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                    <tfoot className="bg-slate-50 dark:bg-slate-800/70 font-bold border-t-2 border-slate-300 dark:border-slate-700">
+                      <tr>
+                        <td colSpan={3} className="py-3 px-3 uppercase text-[10px] tracking-wider text-slate-700 dark:text-slate-300">
+                          Summary Totals
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono text-indigo-600 text-sm">
+                          {reports.stockMovement.itemSummaryList.reduce((sum, i) => sum + i.currentStock, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono text-emerald-600 text-sm">
+                          +{reports.stockMovement.itemSummaryList.reduce((sum, i) => sum + i.purchasesInQty, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono text-purple-600 text-sm">
+                          +{reports.stockMovement.itemSummaryList.reduce((sum, i) => sum + i.transfersInQty, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono text-sky-600 text-sm">
+                          +{reports.stockMovement.itemSummaryList.reduce((sum, i) => sum + i.returnsInQty, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono text-emerald-700 font-bold text-sm bg-emerald-50/50 dark:bg-emerald-950/20">
+                          +{reports.stockMovement.itemSummaryList.reduce((sum, i) => sum + i.totalInQty, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono text-rose-600 text-sm">
+                          -{reports.stockMovement.itemSummaryList.reduce((sum, i) => sum + i.salesOutQty, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono text-amber-600 text-sm">
+                          -{reports.stockMovement.itemSummaryList.reduce((sum, i) => sum + i.transfersOutQty, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono text-rose-700 font-bold text-sm bg-rose-50/50 dark:bg-rose-950/20">
+                          -{reports.stockMovement.itemSummaryList.reduce((sum, i) => sum + i.totalOutQty, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-2 text-right font-mono font-bold text-sky-600 text-sm">
+                          {reports.stockMovement.itemSummaryList.reduce((sum, i) => sum + i.netMovementQty, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono text-purple-700 dark:text-purple-300 text-sm">
+                          PKR {reports.stockMovement.itemSummaryList.reduce((sum, i) => sum + i.currentValuation, 0).toLocaleString()}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {reportType === 'sales' && (
           <>

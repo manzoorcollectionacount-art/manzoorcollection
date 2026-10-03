@@ -30,7 +30,8 @@ import {
   Lock,
   Eye,
   EyeOff,
-  Landmark
+  Landmark,
+  Boxes
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import clsx from 'clsx';
@@ -146,6 +147,7 @@ export function Layout() {
     { name: 'Purchases', href: '/purchases', icon: Truck, roles: ['super_admin', 'branch_admin', 'staff', 'limited_access', 'new_limited_access', 'cashier'] },
     { name: 'Vendors', href: '/vendors', icon: Building2, roles: ['super_admin', 'branch_admin', 'staff', 'limited_access', 'new_limited_access'] },
     { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },
+    { name: 'Stock Movement Report', href: '/reports?tab=stock_movement', icon: Boxes, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'staff', 'sales_stock_only', 'cashier'] },
     { name: 'Profit & Loss', href: '/profit-loss', icon: TrendingUp, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },
     { name: 'Salesman Report', href: '/salesman-report', icon: BarChart3, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },
     { name: 'Customer Report', href: '/customer-report', icon: Users, roles: ['super_admin', 'branch_admin', 'staff', 'limited_access', 'new_limited_access'] },
@@ -173,9 +175,7 @@ export function Layout() {
     navigation.push({ name: 'Settings', href: '/settings', icon: ShieldAlert, roles: ['super_admin'] });
   }
 
-  const activeBranch = activeBranchId === 'main' 
-    ? { id: 'main', name: 'Main Branch (HQ)', color: '#10b981', adminEmail: '' }
-    : branches.find(b => b.id === activeBranchId);
+  const activeBranch = branches.find(b => b.id === activeBranchId) || (branches.length > 0 ? branches[0] : null);
 
   return (
     <div className="flex bg-slate-100 flex-1 overflow-hidden h-screen w-full print:h-auto print:overflow-visible print:block relative">
@@ -330,43 +330,32 @@ export function Layout() {
                 <div className="relative">
                   <button 
                     onClick={() => setShowBranchMenu(!showBranchMenu)}
-                    className="bg-slate-50 border border-slate-200 text-xs rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:focus:ring-sky-400 flex items-center justify-between min-w-[120px] sm:min-w-[200px]"
+                    className="bg-slate-50 border border-slate-200 text-xs rounded px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 dark:focus:ring-sky-400 flex items-center justify-between min-w-[140px] sm:min-w-[200px]"
                   >
-                    <span className="truncate">{activeBranch ? activeBranch.name : (!activeBranchId || activeBranchId === 'all' ? 'All Branches (Overall)' : 'Select Branch')}</span>
+                    <span className="truncate font-semibold">{activeBranch ? activeBranch.name : 'Select Branch'}</span>
                     <ChevronDown className="w-3 h-3 text-slate-500 ml-2 shrink-0" />
                   </button>
 
                   {showBranchMenu && (
                     <div className="absolute left-0 mt-1 w-full rounded shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-20 text-xs text-slate-700">
                       <div className="py-1" role="menu">
-                            <button
-                              onClick={() => { setActiveBranchId(null); setShowBranchMenu(false); }}
-                              className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center font-bold text-sky-600 border-b border-slate-100 dark:border-slate-800"
-                            >
-                              <span className="w-2 h-2 rounded-full mr-2 bg-sky-500"></span>
-                              All Branches (Overall)
-                            </button>
-                            <button
-                              onClick={() => { setActiveBranchId('main'); setShowBranchMenu(false); }}
-                              className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center font-medium"
-                            >
-                              <span className="w-2 h-2 rounded-full mr-2 bg-emerald-500"></span>
-                              Main Branch (HQ)
-                            </button>
-                            {branches.map(branch => (
-                              <button
-                                key={branch.id}
-                                onClick={() => { setActiveBranchId(branch.id); setShowBranchMenu(false); }}
-                                className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center"
-                              >
-                                <span className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: branch.color }}></span>
-                                {branch.name}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                        {branches.map(branch => (
+                          <button
+                            key={branch.id}
+                            onClick={() => { setActiveBranchId(branch.id); setShowBranchMenu(false); }}
+                            className={clsx(
+                              "w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center font-medium transition",
+                              activeBranchId === branch.id && "bg-sky-50 text-sky-700 font-bold"
+                            )}
+                          >
+                            <span className="w-2.5 h-2.5 rounded-full mr-2 shrink-0" style={{ backgroundColor: branch.color }}></span>
+                            <span className="truncate">{branch.name}</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="flex items-center gap-2 bg-[#d1fae5] text-[#065f46] px-3 py-1 rounded-full text-xs font-semibold">
