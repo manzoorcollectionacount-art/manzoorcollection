@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useBranch } from '../context/BranchContext';
 import { useAuth } from '../context/AuthContext';
-import { collection, query, where, onSnapshot, addDoc, Timestamp, doc, updateDoc, getDoc, runTransaction, writeBatch, orderBy } from '../lib/customFirestore';
+import { collection, query, where, onSnapshot, addDoc, Timestamp, doc, updateDoc, deleteDoc, getDoc, runTransaction, writeBatch, orderBy } from '../lib/customFirestore';
 import { db, safeGetDocs, safeCollectionSnapshot } from '../lib/firebase';
-import { Plus, Printer, Trash2, Search, User, Package, Receipt, ArrowLeft, RefreshCcw } from 'lucide-react';
+import { Plus, Printer, Trash2, Search, User, Package, Receipt, ArrowLeft, RefreshCcw, Pencil, AlertCircle } from 'lucide-react';
 import { printInvoice } from '../lib/print';
 import toast from 'react-hot-toast';
 import { Employee, InventoryItem, EmployeePurchase, EmployeeReturn, SaleItem } from '../types';
@@ -23,6 +23,9 @@ export function EmployeePurchases() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [printPurchase, setPrintPurchase] = useState<EmployeePurchase | null>(null);
   const [printReturn, setPrintReturn] = useState<EmployeeReturn | null>(null);
+  const [editingPurchase, setEditingPurchase] = useState<EmployeePurchase | null>(null);
+  const [editingReturn, setEditingReturn] = useState<EmployeeReturn | null>(null);
+  const [historySearch, setHistorySearch] = useState('');
 
   // Form State
   const [selectedEmpId, setSelectedEmpId] = useState('');
@@ -105,6 +108,98 @@ export function EmployeePurchases() {
 
   const total = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
 
+  const handleEditPurchase = (purchase: EmployeePurchase) => {
+    setActiveTab('purchase');
+    setEditingPurchase(purchase);
+    setEditingReturn(null);
+    setSelectedEmpId(purchase.employeeId);
+    setCart(purchase.items.map(item => ({ ...item })));
+    setShowAdd(true);
+    setPrintPurchase(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleEditReturn = (ret: EmployeeReturn) => {
+    setActiveTab('return');
+    setEditingReturn(ret);
+    setEditingPurchase(null);
+    setSelectedEmpId(ret.employeeId);
+    setCart(ret.items.map(item => ({ ...item })));
+    setShowAdd(true);
+    setPrintReturn(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleCancelEdit = () => {
+    setEditingPurchase(null);
+    setEditingReturn(null);
+    setShowAdd(false);
+    setCart([]);
+    setSelectedEmpId('');
+    setSearchQuery('');
+    setEmpSearchQuery('');
+  };
+
+  const handleDeletePurchase = async (purchase: EmployeePurchase) => {
+    if (!window.confirm(`Are you sure you want to delete purchase bill ${purchase.invoiceNo}? This will restore inventory stock and deduct PKR ${purchase.total.toLocaleString()} from employee advance balance.`)) {
+      return;
+    }
+    try {
+      const batch = writeBatch(db);
+      for (const item of purchase.items) {
+        const invItem = inventory.find(i => i.id === item.id);
+        if (invItem) {
+          batch.update(doc(db, 'inventory', item.id), {
+            stock: (invItem.stock || 0) + item.qty,
+            updatedAt: Timestamp.now()
+          });
+        }
+      }
+      const emp = employees.find(e => e.id === purchase.employeeId);
+      if (emp) {
+        batch.update(doc(db, 'employees', emp.id), {
+          advanceBalance: Math.max(0, (emp.advanceBalance || 0) - purchase.total),
+          updatedAt: Timestamp.now()
+        });
+      }
+      batch.delete(doc(db, 'employeePurchases', purchase.id));
+      await batch.commit();
+      toast.success(`Purchase bill ${purchase.invoiceNo} deleted successfully`);
+    } catch (err: any) {
+      toast.error("Failed to delete purchase: " + err.message);
+    }
+  };
+
+  const handleDeleteReturn = async (ret: EmployeeReturn) => {
+    if (!window.confirm(`Are you sure you want to delete return bill ${ret.returnNo}? This will reduce inventory stock and add PKR ${ret.total.toLocaleString()} back to employee advance balance.`)) {
+      return;
+    }
+    try {
+      const batch = writeBatch(db);
+      for (const item of ret.items) {
+        const invItem = inventory.find(i => i.id === item.id);
+        if (invItem) {
+          batch.update(doc(db, 'inventory', item.id), {
+            stock: (invItem.stock || 0) - item.qty,
+            updatedAt: Timestamp.now()
+          });
+        }
+      }
+      const emp = employees.find(e => e.id === ret.employeeId);
+      if (emp) {
+        batch.update(doc(db, 'employees', emp.id), {
+          advanceBalance: (emp.advanceBalance || 0) + ret.total,
+          updatedAt: Timestamp.now()
+        });
+      }
+      batch.delete(doc(db, 'employeeReturns', ret.id));
+      await batch.commit();
+      toast.success(`Return bill ${ret.returnNo} deleted successfully`);
+    } catch (err: any) {
+      toast.error("Failed to delete return: " + err.message);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEmpId) return toast.error("Please select an employee");
@@ -118,117 +213,291 @@ export function EmployeePurchases() {
       const batch = writeBatch(db);
 
       if (activeTab === 'purchase') {
-        // PURCHASE LOGIC
-        const invoiceNo = `EP-${Date.now().toString().slice(-6)}`;
-        const purchaseData = {
-          invoiceNo,
-          employeeId: employee.id,
-          employeeName: employee.name,
-          branchId: activeBranchId,
-          items: cart,
-          total,
-          date: new Date().getTime(),
-          createdAt: Timestamp.now(),
-          tenantId: user?.tenantId || user?.uid
-        };
+        if (editingPurchase) {
+          // EDIT PURCHASE LOGIC
+          const invoiceNo = editingPurchase.invoiceNo;
+          const purchaseRef = doc(db, 'employeePurchases', editingPurchase.id);
 
-        const purchaseRef = doc(collection(db, 'employeePurchases'));
-        batch.set(purchaseRef, purchaseData);
+          batch.update(purchaseRef, {
+            employeeId: employee.id,
+            employeeName: employee.name,
+            items: cart,
+            total,
+            updatedAt: Timestamp.now()
+          });
 
-        // Update Employee Advance Balance (+)
-        const empRef = doc(db, 'employees', employee.id);
-        batch.update(empRef, {
-          advanceBalance: (employee.advanceBalance || 0) + total,
-          updatedAt: Timestamp.now()
-        });
+          // Stock adjustments: add back old qty, deduct new qty
+          const stockDeltas: { [id: string]: number } = {};
+          for (const item of editingPurchase.items) {
+            stockDeltas[item.id] = (stockDeltas[item.id] || 0) + item.qty;
+          }
+          for (const item of cart) {
+            stockDeltas[item.id] = (stockDeltas[item.id] || 0) - item.qty;
+          }
 
-        // Update Inventory Stock (-)
-        for (const item of cart) {
-          const invRef = doc(db, 'inventory', item.id);
-          const invItem = inventory.find(i => i.id === item.id);
-          if (invItem) {
-            batch.update(invRef, {
-              stock: (invItem.stock || 0) - item.qty,
+          for (const [itemId, delta] of Object.entries(stockDeltas)) {
+            if (delta !== 0) {
+              const invItem = inventory.find(i => i.id === itemId);
+              if (invItem) {
+                batch.update(doc(db, 'inventory', itemId), {
+                  stock: (invItem.stock || 0) + delta,
+                  updatedAt: Timestamp.now()
+                });
+              }
+            }
+          }
+
+          // Advance balance adjustments
+          if (editingPurchase.employeeId === selectedEmpId) {
+            const diff = total - editingPurchase.total;
+            batch.update(doc(db, 'employees', employee.id), {
+              advanceBalance: (employee.advanceBalance || 0) + diff,
+              updatedAt: Timestamp.now()
+            });
+          } else {
+            const oldEmp = employees.find(e => e.id === editingPurchase.employeeId);
+            if (oldEmp) {
+              batch.update(doc(db, 'employees', oldEmp.id), {
+                advanceBalance: Math.max(0, (oldEmp.advanceBalance || 0) - editingPurchase.total),
+                updatedAt: Timestamp.now()
+              });
+            }
+            batch.update(doc(db, 'employees', employee.id), {
+              advanceBalance: (employee.advanceBalance || 0) + total,
               updatedAt: Timestamp.now()
             });
           }
+
+          // Update ledger
+          try {
+            const ledgerQ = query(collection(db, 'ledger'), where('branchId', '==', activeBranchId));
+            const ledgerDocs = await safeGetDocs(ledgerQ);
+            const matchedDoc = ledgerDocs.docs.find(d => {
+              const desc = d.data().description || '';
+              return desc.includes(invoiceNo);
+            });
+            if (matchedDoc) {
+              batch.update(doc(db, 'ledger', matchedDoc.id), {
+                amount: total,
+                employeeId: employee.id,
+                description: `Employee Purchase: ${employee.name} (Inv: ${invoiceNo})`,
+                updatedAt: Timestamp.now()
+              });
+            }
+          } catch (lErr) {
+            console.warn("Could not sync ledger", lErr);
+          }
+
+          await batch.commit();
+          toast.success(`Purchase Bill ${invoiceNo} Updated Successfully!`);
+          setPrintPurchase({
+            ...editingPurchase,
+            employeeId: employee.id,
+            employeeName: employee.name,
+            items: cart,
+            total
+          });
+        } else {
+          // NEW PURCHASE LOGIC
+          const invoiceNo = `EP-${Date.now().toString().slice(-6)}`;
+          const purchaseData = {
+            invoiceNo,
+            employeeId: employee.id,
+            employeeName: employee.name,
+            branchId: activeBranchId,
+            items: cart,
+            total,
+            date: new Date().getTime(),
+            createdAt: Timestamp.now(),
+            tenantId: user?.tenantId || user?.uid
+          };
+
+          const purchaseRef = doc(collection(db, 'employeePurchases'));
+          batch.set(purchaseRef, purchaseData);
+
+          // Update Employee Advance Balance (+)
+          const empRef = doc(db, 'employees', employee.id);
+          batch.update(empRef, {
+            advanceBalance: (employee.advanceBalance || 0) + total,
+            updatedAt: Timestamp.now()
+          });
+
+          // Update Inventory Stock (-)
+          for (const item of cart) {
+            const invRef = doc(db, 'inventory', item.id);
+            const invItem = inventory.find(i => i.id === item.id);
+            if (invItem) {
+              batch.update(invRef, {
+                stock: (invItem.stock || 0) - item.qty,
+                updatedAt: Timestamp.now()
+              });
+            }
+          }
+
+          // Add Ledger Entry (OUT)
+          const ledgerRef = doc(collection(db, 'ledger'));
+          batch.set(ledgerRef, {
+            branchId: activeBranchId,
+            date: new Date().getTime(),
+            description: `Employee Purchase: ${employee.name} (Inv: ${invoiceNo})`,
+            category: 'Advance',
+            type: 'OUT',
+            amount: total,
+            reference: 'Advance',
+            employeeId: employee.id,
+            createdAt: Timestamp.now(),
+            tenantId: user?.tenantId || user?.uid
+          });
+
+          await batch.commit();
+          toast.success("Employee Purchase Recorded Successfully");
+          setPrintPurchase({ id: purchaseRef.id, ...purchaseData } as EmployeePurchase);
         }
-
-        // Add Ledger Entry (OUT)
-        const ledgerRef = doc(collection(db, 'ledger'));
-        batch.set(ledgerRef, {
-          branchId: activeBranchId,
-          date: new Date().getTime(),
-          description: `Employee Purchase: ${employee.name} (Inv: ${invoiceNo})`,
-          category: 'Advance',
-          type: 'OUT',
-          amount: total,
-          reference: 'Advance',
-          employeeId: employee.id,
-          createdAt: Timestamp.now(),
-          tenantId: user?.tenantId || user?.uid
-        });
-
-        await batch.commit();
-        toast.success("Employee Purchase Recorded Successfully");
-        setPrintPurchase({ id: purchaseRef.id, ...purchaseData } as EmployeePurchase);
       } else {
-        // RETURN LOGIC
-        const returnNo = `ER-${Date.now().toString().slice(-6)}`;
-        const returnData = {
-          returnNo,
-          employeeId: employee.id,
-          employeeName: employee.name,
-          branchId: activeBranchId,
-          items: cart,
-          total,
-          date: new Date().getTime(),
-          createdAt: Timestamp.now(),
-          tenantId: user?.tenantId || user?.uid
-        };
+        if (editingReturn) {
+          // EDIT RETURN LOGIC
+          const returnNo = editingReturn.returnNo;
+          const returnRef = doc(db, 'employeeReturns', editingReturn.id);
 
-        const returnRef = doc(collection(db, 'employeeReturns'));
-        batch.set(returnRef, returnData);
+          batch.update(returnRef, {
+            employeeId: employee.id,
+            employeeName: employee.name,
+            items: cart,
+            total,
+            updatedAt: Timestamp.now()
+          });
 
-        // Update Employee Advance Balance (-)
-        const empRef = doc(db, 'employees', employee.id);
-        batch.update(empRef, {
-          advanceBalance: (employee.advanceBalance || 0) - total,
-          updatedAt: Timestamp.now()
-        });
+          // Stock adjustments: return adds to stock, so old return added stock, we deduct old qty and add new qty
+          const stockDeltas: { [id: string]: number } = {};
+          for (const item of editingReturn.items) {
+            stockDeltas[item.id] = (stockDeltas[item.id] || 0) - item.qty;
+          }
+          for (const item of cart) {
+            stockDeltas[item.id] = (stockDeltas[item.id] || 0) + item.qty;
+          }
 
-        // Update Inventory Stock (+)
-        for (const item of cart) {
-          const invRef = doc(db, 'inventory', item.id);
-          const invItem = inventory.find(i => i.id === item.id);
-          if (invItem) {
-            batch.update(invRef, {
-              stock: (invItem.stock || 0) + item.qty,
+          for (const [itemId, delta] of Object.entries(stockDeltas)) {
+            if (delta !== 0) {
+              const invItem = inventory.find(i => i.id === itemId);
+              if (invItem) {
+                batch.update(doc(db, 'inventory', itemId), {
+                  stock: (invItem.stock || 0) + delta,
+                  updatedAt: Timestamp.now()
+                });
+              }
+            }
+          }
+
+          // Advance balance adjustments: return reduces advance, so diff is inverted
+          if (editingReturn.employeeId === selectedEmpId) {
+            const diff = total - editingReturn.total;
+            batch.update(doc(db, 'employees', employee.id), {
+              advanceBalance: Math.max(0, (employee.advanceBalance || 0) - diff),
+              updatedAt: Timestamp.now()
+            });
+          } else {
+            const oldEmp = employees.find(e => e.id === editingReturn.employeeId);
+            if (oldEmp) {
+              batch.update(doc(db, 'employees', oldEmp.id), {
+                advanceBalance: (oldEmp.advanceBalance || 0) + editingReturn.total,
+                updatedAt: Timestamp.now()
+              });
+            }
+            batch.update(doc(db, 'employees', employee.id), {
+              advanceBalance: Math.max(0, (employee.advanceBalance || 0) - total),
               updatedAt: Timestamp.now()
             });
           }
+
+          // Update ledger
+          try {
+            const ledgerQ = query(collection(db, 'ledger'), where('branchId', '==', activeBranchId));
+            const ledgerDocs = await safeGetDocs(ledgerQ);
+            const matchedDoc = ledgerDocs.docs.find(d => {
+              const desc = d.data().description || '';
+              return desc.includes(returnNo);
+            });
+            if (matchedDoc) {
+              batch.update(doc(db, 'ledger', matchedDoc.id), {
+                amount: total,
+                employeeId: employee.id,
+                description: `Employee Return: ${employee.name} (Ret: ${returnNo})`,
+                updatedAt: Timestamp.now()
+              });
+            }
+          } catch (lErr) {
+            console.warn("Could not sync ledger", lErr);
+          }
+
+          await batch.commit();
+          toast.success(`Return Bill ${returnNo} Updated Successfully!`);
+          setPrintReturn({
+            ...editingReturn,
+            employeeId: employee.id,
+            employeeName: employee.name,
+            items: cart,
+            total
+          });
+        } else {
+          // NEW RETURN LOGIC
+          const returnNo = `ER-${Date.now().toString().slice(-6)}`;
+          const returnData = {
+            returnNo,
+            employeeId: employee.id,
+            employeeName: employee.name,
+            branchId: activeBranchId,
+            items: cart,
+            total,
+            date: new Date().getTime(),
+            createdAt: Timestamp.now(),
+            tenantId: user?.tenantId || user?.uid
+          };
+
+          const returnRef = doc(collection(db, 'employeeReturns'));
+          batch.set(returnRef, returnData);
+
+          // Update Employee Advance Balance (-)
+          const empRef = doc(db, 'employees', employee.id);
+          batch.update(empRef, {
+            advanceBalance: (employee.advanceBalance || 0) - total,
+            updatedAt: Timestamp.now()
+          });
+
+          // Update Inventory Stock (+)
+          for (const item of cart) {
+            const invRef = doc(db, 'inventory', item.id);
+            const invItem = inventory.find(i => i.id === item.id);
+            if (invItem) {
+              batch.update(invRef, {
+                stock: (invItem.stock || 0) + item.qty,
+                updatedAt: Timestamp.now()
+              });
+            }
+          }
+
+          // Add Ledger Entry (IN)
+          const ledgerRef = doc(collection(db, 'ledger'));
+          batch.set(ledgerRef, {
+            branchId: activeBranchId,
+            date: new Date().getTime(),
+            description: `Employee Return: ${employee.name} (Ret: ${returnNo})`,
+            category: 'Advance',
+            type: 'IN',
+            amount: total,
+            reference: 'Advance',
+            employeeId: employee.id,
+            createdAt: Timestamp.now(),
+            tenantId: user?.tenantId || user?.uid
+          });
+
+          await batch.commit();
+          toast.success("Employee Return Recorded Successfully");
+          setPrintReturn({ id: returnRef.id, ...returnData } as EmployeeReturn);
         }
-
-        // Add Ledger Entry (IN)
-        const ledgerRef = doc(collection(db, 'ledger'));
-        batch.set(ledgerRef, {
-          branchId: activeBranchId,
-          date: new Date().getTime(),
-          description: `Employee Return: ${employee.name} (Ret: ${returnNo})`,
-          category: 'Advance',
-          type: 'IN',
-          amount: total,
-          reference: 'Advance',
-          employeeId: employee.id,
-          createdAt: Timestamp.now(),
-          tenantId: user?.tenantId || user?.uid
-        });
-
-        await batch.commit();
-        toast.success("Employee Return Recorded Successfully");
-        setPrintReturn({ id: returnRef.id, ...returnData } as EmployeeReturn);
       }
 
+      setEditingPurchase(null);
+      setEditingReturn(null);
       setShowAdd(false);
       setCart([]);
       setSelectedEmpId('');
@@ -261,9 +530,20 @@ export function EmployeePurchases() {
           <button onClick={() => { setPrintPurchase(null); setPrintReturn(null); }} className="flex items-center text-slate-600 hover:text-slate-900">
             <ArrowLeft className="w-5 h-5 mr-2" /> Back
           </button>
-          <button onClick={() => printInvoice('emp-transaction-print', `Transaction-${invoiceNo}`, 'thermal')} className="btn btn-primary flex items-center">
-            <Printer className="w-5 h-5 mr-2" /> Print Thermal Bill
-          </button>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => {
+                if (printPurchase) handleEditPurchase(printPurchase);
+                else if (printReturn) handleEditReturn(printReturn);
+              }}
+              className="btn btn-secondary flex items-center gap-1.5 text-amber-600 hover:text-amber-700"
+            >
+              <Pencil className="w-4 h-4" /> Edit Bill
+            </button>
+            <button onClick={() => printInvoice('emp-transaction-print', `Transaction-${invoiceNo}`, 'thermal')} className="btn btn-primary flex items-center">
+              <Printer className="w-5 h-5 mr-2" /> Print Thermal Bill
+            </button>
+          </div>
         </div>
 
         <div id="emp-transaction-print" className="bg-white p-4 max-w-[300px] mx-auto text-black font-sans text-[14px] leading-tight font-black">
@@ -354,6 +634,29 @@ export function EmployeePurchases() {
 
       {showAdd ? (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Editing Notice Banner */}
+          {(editingPurchase || editingReturn) && (
+            <div className="lg:col-span-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
+                <div>
+                  <h4 className="font-bold text-amber-900 dark:text-amber-200 text-sm">
+                    {editingPurchase ? `Editing Employee Purchase Bill: ${editingPurchase.invoiceNo}` : `Editing Employee Return Bill: ${editingReturn?.returnNo}`}
+                  </h4>
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Modifying items, quantities, or rate will automatically balance the employee advance account and adjust inventory stock.
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={handleCancelEdit} 
+                className="px-3 py-1.5 text-xs font-bold rounded-lg border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 bg-white dark:bg-slate-800 hover:bg-amber-100 transition-colors shadow-sm"
+              >
+                Cancel Edit
+              </button>
+            </div>
+          )}
+
           {/* Left Column: Selection */}
           <div className="lg:col-span-2 space-y-6">
             {/* Employee Selection */}
@@ -495,13 +798,21 @@ export function EmployeePurchases() {
                 )}
 
                 <div className="flex gap-3 pt-4">
-                  <button onClick={() => { setShowAdd(false); setCart([]); setSelectedEmpId(''); }} className="flex-1 btn btn-secondary">Cancel</button>
+                  <button onClick={handleCancelEdit} className="flex-1 btn btn-secondary">
+                    {editingPurchase || editingReturn ? 'Cancel Edit' : 'Cancel'}
+                  </button>
                   <button 
                     onClick={handleSubmit} 
                     disabled={isSubmitting || cart.length === 0 || !selectedEmpId} 
                     className={`flex-[2] btn flex items-center justify-center text-white ${activeTab === 'purchase' ? 'bg-sky-600 hover:bg-sky-700' : 'bg-rose-600 hover:bg-rose-700'}`}
                   >
-                    {isSubmitting ? 'Processing...' : `Confirm ${activeTab === 'purchase' ? 'Purchase' : 'Return'}`}
+                    {isSubmitting 
+                      ? 'Processing...' 
+                      : (editingPurchase 
+                          ? 'Update Purchase Bill' 
+                          : editingReturn 
+                            ? 'Update Return Bill' 
+                            : `Confirm ${activeTab === 'purchase' ? 'Purchase' : 'Return'}`)}
                   </button>
                 </div>
               </div>
@@ -536,9 +847,17 @@ export function EmployeePurchases() {
                         <td className="px-6 py-4 text-sm text-slate-500">{p.items.length} items</td>
                         <td className="px-6 py-4 text-sm font-bold text-emerald-600 text-right">PKR {p.total.toLocaleString()}</td>
                         <td className="px-6 py-4 text-center">
-                          <button onClick={() => setPrintPurchase(p)} className="p-2 text-sky-500 hover:bg-sky-50 rounded-full transition-colors">
-                            <Printer className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button onClick={() => setPrintPurchase(p)} title="Print Thermal Bill" className="p-2 text-sky-600 hover:bg-sky-50 dark:hover:bg-slate-800 rounded-lg transition-colors">
+                              <Printer className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => handleEditPurchase(p)} title="Edit Purchase Bill" className="p-2 text-amber-600 hover:bg-amber-50 dark:hover:bg-slate-800 rounded-lg transition-colors">
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => handleDeletePurchase(p)} title="Delete Purchase Bill" className="p-2 text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 rounded-lg transition-colors">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -577,9 +896,17 @@ export function EmployeePurchases() {
                         <td className="px-6 py-4 text-sm text-slate-500">{r.items.length} items</td>
                         <td className="px-6 py-4 text-sm font-bold text-rose-600 text-right">PKR {r.total.toLocaleString()}</td>
                         <td className="px-6 py-4 text-center">
-                          <button onClick={() => setPrintReturn(r)} className="p-2 text-rose-500 hover:bg-rose-50 rounded-full transition-colors">
-                            <Printer className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button onClick={() => setPrintReturn(r)} title="Print Thermal Bill" className="p-2 text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 rounded-lg transition-colors">
+                              <Printer className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => handleEditReturn(r)} title="Edit Return Bill" className="p-2 text-amber-600 hover:bg-amber-50 dark:hover:bg-slate-800 rounded-lg transition-colors">
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => handleDeleteReturn(r)} title="Delete Return Bill" className="p-2 text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 rounded-lg transition-colors">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

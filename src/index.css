@@ -26,6 +26,42 @@ body, html {
     print-color-adjust: exact !important;
   }
 
+  /* Ensure text is never faded or light in print - solid black and 100% opacity */
+  body, #root, [id*="print"], table, tr, td, th, p, span, h1, h2, h3, h4, div {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    opacity: 1 !important;
+  }
+
+  /* Specific payroll print clarity */
+  #payroll-print-content,
+  #individual-payslip-print,
+  #individual-payslip-thermal-print {
+    color: #000000 !important;
+    background: #ffffff !important;
+  }
+
+  #payroll-print-content th,
+  #payroll-print-content td,
+  #individual-payslip-print th,
+  #individual-payslip-print td {
+    border-color: #000000 !important;
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    font-weight: 700 !important;
+  }
+
+  #payroll-print-content th {
+    font-weight: 900 !important;
+    background-color: #e5e7eb !important;
+  }
+
+  #individual-payslip-thermal-print * {
+    font-weight: 800 !important;
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+  }
+
   /* Strictly Hide Chrome, Header/Menu, Sidebar, and Action Buttons */
   header,
   aside,

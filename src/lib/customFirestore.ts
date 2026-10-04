@@ -1,4 +1,22 @@
 import { apiFetch } from './apiUrl';
+import {
+  saveDocLocally,
+  getDocLocally,
+  deleteDocLocally,
+  saveQueryLocally,
+  getQueryLocally,
+  enqueueSyncOp
+} from './offlineStorage';
+import { updatePendingCount } from './offlineSync';
+
+export function generateFirestoreId(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let id = '';
+  for (let i = 0; i < 20; i++) {
+    id += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return id;
+}
 
 export class MockTimestamp {
   seconds: number;
@@ -239,6 +257,23 @@ export async function getDocs(queryOrCol: any): Promise<MockQuerySnapshot> {
     return new MockQuerySnapshot(docs);
   }
 
+  // If offline, directly query local IndexedDB without waiting
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  if (isOffline) {
+    try {
+      const localDocs = await getQueryLocally(collectionName, filters, orderByField, orderByDirection, limitVal, cacheKey);
+      const docs = localDocs.map((doc: any) => new MockDocumentSnapshot(doc.id, doc.data, true, collectionName));
+      return new MockQuerySnapshot(docs);
+    } catch (err) {
+      console.warn(`[Firestore Offline] Failed to read ${collectionName} locally:`, err);
+      if (cached) {
+        const docs = cached.data.map((doc: any) => new MockDocumentSnapshot(doc.id, doc.data, true, collectionName));
+        return new MockQuerySnapshot(docs);
+      }
+      return new MockQuerySnapshot([]);
+    }
+  }
+
   if (inFlightQueries.has(cacheKey)) {
     try {
       const data = await inFlightQueries.get(cacheKey)!;
@@ -263,6 +298,8 @@ export async function getDocs(queryOrCol: any): Promise<MockQuerySnapshot> {
         })
       });
       queryCache.set(cacheKey, { data, timestamp: Date.now() });
+      // Asynchronously cache in IndexedDB for offline use
+      saveQueryLocally(collectionName, cacheKey, data).catch(() => {});
       return data;
     } catch (err: any) {
       const isExpectedAuthOrRateLimit =
@@ -289,11 +326,30 @@ export async function getDocs(queryOrCol: any): Promise<MockQuerySnapshot> {
     const docs = data.map((doc: any) => new MockDocumentSnapshot(doc.id, doc.data, true, collectionName));
     return new MockQuerySnapshot(docs);
   } catch (err: any) {
-    // If cached data is available even if slightly older, return it gracefully
+    // 1. If memory cached data is available, return it gracefully
     if (cached) {
       const docs = cached.data.map((doc: any) => new MockDocumentSnapshot(doc.id, doc.data, true, collectionName));
       return new MockQuerySnapshot(docs);
     }
+    // 2. Seamlessly fall back to IndexedDB local storage
+    try {
+      const localDocs = await getQueryLocally(collectionName, filters, orderByField, orderByDirection, limitVal, cacheKey);
+      if (localDocs && localDocs.length > 0) {
+        const docs = localDocs.map((doc: any) => new MockDocumentSnapshot(doc.id, doc.data, true, collectionName));
+        return new MockQuerySnapshot(docs);
+      }
+    } catch (localErr) {
+      console.warn(`[Firestore] Local fallback failed for ${collectionName}:`, localErr);
+    }
+
+    // 3. If network failed or offline, return empty snapshot instead of throwing
+    const isNetworkError = (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      err?.message?.includes('Failed to fetch') ||
+      err?.name === 'TypeError';
+    if (isNetworkError) {
+      return new MockQuerySnapshot([]);
+    }
+
     throw err;
   }
 }
@@ -302,6 +358,20 @@ export async function getDoc(docRef: any): Promise<MockDocumentSnapshot> {
   const collectionName = docRef.collectionName;
   const id = docRef.id;
   
+  // If offline, check local cache & IndexedDB immediately
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  if (isOffline) {
+    const cached = docCache.get(`${collectionName}::${id}`);
+    if (cached) {
+      return new MockDocumentSnapshot(id, cached.data, true, collectionName);
+    }
+    const localData = await getDocLocally(collectionName, id);
+    if (localData) {
+      return new MockDocumentSnapshot(id, localData, true, collectionName);
+    }
+    return new MockDocumentSnapshot(id, null, false, collectionName);
+  }
+
   try {
     const data = await getDocFromServer(collectionName, id);
     if (!data) {
@@ -309,6 +379,14 @@ export async function getDoc(docRef: any): Promise<MockDocumentSnapshot> {
     }
     return new MockDocumentSnapshot(id, data, true, collectionName);
   } catch (err: any) {
+    // Fallback to local IndexedDB on network error
+    try {
+      const localData = await getDocLocally(collectionName, id);
+      if (localData) {
+        return new MockDocumentSnapshot(id, localData, true, collectionName);
+      }
+    } catch {}
+
     const isExpectedAuthOrRateLimit =
       err?.name === 'AuthSessionError' ||
       err?.message?.includes('Authentication session') ||
@@ -349,6 +427,9 @@ async function getDocFromServer(collectionName: string, id: string): Promise<any
       });
       const data = result?.data || null;
       docCache.set(cacheKey, { data, timestamp: Date.now() });
+      if (data) {
+        saveDocLocally(collectionName, id, data).catch(() => {});
+      }
       return data;
     } catch (err: any) {
       if (err.message && err.message.includes('status 404')) {
@@ -366,6 +447,8 @@ async function getDocFromServer(collectionName: string, id: string): Promise<any
     return await fetchPromise;
   } catch (err: any) {
     if (cached) return cached.data;
+    const localData = await getDocLocally(collectionName, id);
+    if (localData) return localData;
     throw err;
   }
 }
@@ -407,15 +490,48 @@ export function notifyListeners(collectionName?: string) {
 
 export async function addDoc(colRef: any, data: any): Promise<MockDocumentReference> {
   const collectionName = colRef.collectionName;
+  const id = generateFirestoreId();
+  const docData = { ...data, id };
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+  const saveLocalAndQueue = async () => {
+    await saveDocLocally(collectionName, id, docData);
+    docCache.set(`${collectionName}::${id}`, { data: docData, timestamp: Date.now() });
+    await enqueueSyncOp({
+      opType: 'set',
+      collection: collectionName,
+      docId: id,
+      data: docData,
+      merge: false,
+      timestamp: Date.now()
+    });
+    await updatePendingCount();
+    notifyListeners(collectionName);
+    return new MockDocumentReference(collectionName, id);
+  };
+
+  if (isOffline) {
+    return await saveLocalAndQueue();
+  }
+
   try {
     const result = await apiFetch('/api/db/add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection: collectionName, data })
+      body: JSON.stringify({ collection: collectionName, data: docData })
     });
+    const realId = result?.id || id;
+    saveDocLocally(collectionName, realId, docData).catch(() => {});
+    docCache.set(`${collectionName}::${realId}`, { data: docData, timestamp: Date.now() });
     notifyListeners(collectionName);
-    return new MockDocumentReference(collectionName, result.id);
+    return new MockDocumentReference(collectionName, realId);
   } catch (err: any) {
+    const isNetworkError = (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      err?.message?.includes('Failed to fetch') ||
+      err?.name === 'TypeError';
+    if (isNetworkError) {
+      return await saveLocalAndQueue();
+    }
     console.error("Add doc failed:", err);
     throw err;
   }
@@ -424,14 +540,55 @@ export async function addDoc(colRef: any, data: any): Promise<MockDocumentRefere
 export async function setDoc(docRef: any, data: any, options?: any): Promise<void> {
   const collectionName = docRef.collectionName;
   const id = docRef.id;
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+  const saveLocalAndQueue = async () => {
+    let toSave = data;
+    if (options?.merge) {
+      const existing = (await getDocLocally(collectionName, id)) || docCache.get(`${collectionName}::${id}`)?.data;
+      toSave = { ...(existing || {}), ...data };
+    }
+    await saveDocLocally(collectionName, id, toSave);
+    docCache.set(`${collectionName}::${id}`, { data: toSave, timestamp: Date.now() });
+    await enqueueSyncOp({
+      opType: 'set',
+      collection: collectionName,
+      docId: id,
+      data,
+      merge: options?.merge,
+      timestamp: Date.now()
+    });
+    await updatePendingCount();
+    notifyListeners(collectionName);
+  };
+
+  if (isOffline) {
+    await saveLocalAndQueue();
+    return;
+  }
+
   try {
     await apiFetch('/api/db/set', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection: collectionName, id, data, merge: options?.merge })
     });
+    let toSave = data;
+    if (options?.merge) {
+      const existing = (await getDocLocally(collectionName, id)) || docCache.get(`${collectionName}::${id}`)?.data;
+      toSave = { ...(existing || {}), ...data };
+    }
+    saveDocLocally(collectionName, id, toSave).catch(() => {});
+    docCache.set(`${collectionName}::${id}`, { data: toSave, timestamp: Date.now() });
     notifyListeners(collectionName);
   } catch (err: any) {
+    const isNetworkError = (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      err?.message?.includes('Failed to fetch') ||
+      err?.name === 'TypeError';
+    if (isNetworkError) {
+      await saveLocalAndQueue();
+      return;
+    }
     console.error("Set doc failed:", err);
     throw err;
   }
@@ -440,14 +597,48 @@ export async function setDoc(docRef: any, data: any, options?: any): Promise<voi
 export async function updateDoc(docRef: any, data: any): Promise<void> {
   const collectionName = docRef.collectionName;
   const id = docRef.id;
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+  const saveLocalAndQueue = async () => {
+    const existing = (await getDocLocally(collectionName, id)) || docCache.get(`${collectionName}::${id}`)?.data;
+    const merged = { ...(existing || {}), ...data };
+    await saveDocLocally(collectionName, id, merged);
+    docCache.set(`${collectionName}::${id}`, { data: merged, timestamp: Date.now() });
+    await enqueueSyncOp({
+      opType: 'update',
+      collection: collectionName,
+      docId: id,
+      data,
+      timestamp: Date.now()
+    });
+    await updatePendingCount();
+    notifyListeners(collectionName);
+  };
+
+  if (isOffline) {
+    await saveLocalAndQueue();
+    return;
+  }
+
   try {
     await apiFetch('/api/db/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection: collectionName, id, data })
     });
+    const existing = (await getDocLocally(collectionName, id)) || docCache.get(`${collectionName}::${id}`)?.data;
+    const merged = { ...(existing || {}), ...data };
+    saveDocLocally(collectionName, id, merged).catch(() => {});
+    docCache.set(`${collectionName}::${id}`, { data: merged, timestamp: Date.now() });
     notifyListeners(collectionName);
   } catch (err: any) {
+    const isNetworkError = (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      err?.message?.includes('Failed to fetch') ||
+      err?.name === 'TypeError';
+    if (isNetworkError) {
+      await saveLocalAndQueue();
+      return;
+    }
     console.error("Update doc failed:", err);
     throw err;
   }
@@ -456,14 +647,43 @@ export async function updateDoc(docRef: any, data: any): Promise<void> {
 export async function deleteDoc(docRef: any): Promise<void> {
   const collectionName = docRef.collectionName;
   const id = docRef.id;
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+  const deleteLocalAndQueue = async () => {
+    await deleteDocLocally(collectionName, id);
+    docCache.delete(`${collectionName}::${id}`);
+    await enqueueSyncOp({
+      opType: 'delete',
+      collection: collectionName,
+      docId: id,
+      timestamp: Date.now()
+    });
+    await updatePendingCount();
+    notifyListeners(collectionName);
+  };
+
+  if (isOffline) {
+    await deleteLocalAndQueue();
+    return;
+  }
+
   try {
     await apiFetch('/api/db/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection: collectionName, id })
     });
+    deleteDocLocally(collectionName, id).catch(() => {});
+    docCache.delete(`${collectionName}::${id}`);
     notifyListeners(collectionName);
   } catch (err: any) {
+    const isNetworkError = (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      err?.message?.includes('Failed to fetch') ||
+      err?.name === 'TypeError';
+    if (isNetworkError) {
+      await deleteLocalAndQueue();
+      return;
+    }
     console.error("Delete doc failed:", err);
     throw err;
   }
@@ -550,7 +770,19 @@ class MockTransaction {
   async get(docRef: any) {
     const colName = docRef.collectionName;
     const id = docRef.id;
-    const data = await getDocFromServer(colName, id);
+    let data: any = null;
+    const cacheKey = `${colName}::${id}`;
+    if (docCache.has(cacheKey)) {
+      data = docCache.get(cacheKey)!.data;
+    }
+    if (!data && (typeof navigator === 'undefined' || navigator.onLine)) {
+      try {
+        data = await getDocFromServer(colName, id);
+      } catch (err) {}
+    }
+    if (!data) {
+      data = await getDocLocally(colName, id);
+    }
     return new MockDocumentSnapshot(id, data, !!data, colName);
   }
   
@@ -583,13 +815,84 @@ class MockTransaction {
   
   async commit() {
     if (this.writes.length === 0) return;
-    await apiFetch('/api/db-batch/transaction', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ writes: this.writes })
-    });
-    const colNames = Array.from(new Set(this.writes.map(w => w.collection)));
-    colNames.forEach(col => notifyListeners(col));
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+    const applyLocallyAndQueue = async () => {
+      for (const op of this.writes) {
+        if (op.type === 'set') {
+          let toSave = op.data;
+          if (op.merge) {
+            const existing = (await getDocLocally(op.collection, op.id)) || docCache.get(`${op.collection}::${op.id}`)?.data;
+            toSave = { ...(existing || {}), ...op.data };
+          }
+          await saveDocLocally(op.collection, op.id, toSave);
+          docCache.set(`${op.collection}::${op.id}`, { data: toSave, timestamp: Date.now() });
+        } else if (op.type === 'update') {
+          const existing = (await getDocLocally(op.collection, op.id)) || docCache.get(`${op.collection}::${op.id}`)?.data;
+          const merged = { ...(existing || {}), ...op.data };
+          await saveDocLocally(op.collection, op.id, merged);
+          docCache.set(`${op.collection}::${op.id}`, { data: merged, timestamp: Date.now() });
+        } else if (op.type === 'delete') {
+          await deleteDocLocally(op.collection, op.id);
+          docCache.delete(`${op.collection}::${op.id}`);
+        }
+      }
+      await enqueueSyncOp({
+        opType: 'batch',
+        collection: 'batch',
+        docId: 'batch',
+        writes: this.writes,
+        timestamp: Date.now()
+      });
+      await updatePendingCount();
+      const colNames = Array.from(new Set(this.writes.map(w => w.collection)));
+      colNames.forEach(col => notifyListeners(col));
+    };
+
+    if (isOffline) {
+      await applyLocallyAndQueue();
+      return;
+    }
+
+    try {
+      await apiFetch('/api/db-batch/transaction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ writes: this.writes })
+      });
+      // Mirror locally into IndexedDB
+      for (const op of this.writes) {
+        if (op.type === 'set') {
+          let toSave = op.data;
+          if (op.merge) {
+            const existing = (await getDocLocally(op.collection, op.id)) || docCache.get(`${op.collection}::${op.id}`)?.data;
+            toSave = { ...(existing || {}), ...op.data };
+          }
+          saveDocLocally(op.collection, op.id, toSave).catch(() => {});
+          docCache.set(`${op.collection}::${op.id}`, { data: toSave, timestamp: Date.now() });
+        } else if (op.type === 'update') {
+          const existing = (await getDocLocally(op.collection, op.id)) || docCache.get(`${op.collection}::${op.id}`)?.data;
+          const merged = { ...(existing || {}), ...op.data };
+          saveDocLocally(op.collection, op.id, merged).catch(() => {});
+          docCache.set(`${op.collection}::${op.id}`, { data: merged, timestamp: Date.now() });
+        } else if (op.type === 'delete') {
+          deleteDocLocally(op.collection, op.id).catch(() => {});
+          docCache.delete(`${op.collection}::${op.id}`);
+        }
+      }
+      const colNames = Array.from(new Set(this.writes.map(w => w.collection)));
+      colNames.forEach(col => notifyListeners(col));
+    } catch (err: any) {
+      const isNetworkError = (typeof navigator !== 'undefined' && !navigator.onLine) ||
+        err?.message?.includes('Failed to fetch') ||
+        err?.name === 'TypeError';
+      if (isNetworkError) {
+        await applyLocallyAndQueue();
+        return;
+      }
+      console.error("Transaction commit failed:", err);
+      throw err;
+    }
   }
 }
 
@@ -632,18 +935,121 @@ class MockWriteBatch {
   
   async commit() {
     if (this.writes.length === 0) return;
-    await apiFetch('/api/db-batch/transaction', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ writes: this.writes })
-    });
-    const colNames = Array.from(new Set(this.writes.map(w => w.collection)));
-    colNames.forEach(col => notifyListeners(col));
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+    const applyLocallyAndQueue = async () => {
+      for (const op of this.writes) {
+        if (op.type === 'set') {
+          let toSave = op.data;
+          if (op.merge) {
+            const existing = (await getDocLocally(op.collection, op.id)) || docCache.get(`${op.collection}::${op.id}`)?.data;
+            toSave = { ...(existing || {}), ...op.data };
+          }
+          await saveDocLocally(op.collection, op.id, toSave);
+          docCache.set(`${op.collection}::${op.id}`, { data: toSave, timestamp: Date.now() });
+        } else if (op.type === 'update') {
+          const existing = (await getDocLocally(op.collection, op.id)) || docCache.get(`${op.collection}::${op.id}`)?.data;
+          const merged = { ...(existing || {}), ...op.data };
+          await saveDocLocally(op.collection, op.id, merged);
+          docCache.set(`${op.collection}::${op.id}`, { data: merged, timestamp: Date.now() });
+        } else if (op.type === 'delete') {
+          await deleteDocLocally(op.collection, op.id);
+          docCache.delete(`${op.collection}::${op.id}`);
+        }
+      }
+      await enqueueSyncOp({
+        opType: 'batch',
+        collection: 'batch',
+        docId: 'batch',
+        writes: this.writes,
+        timestamp: Date.now()
+      });
+      await updatePendingCount();
+      const colNames = Array.from(new Set(this.writes.map(w => w.collection)));
+      colNames.forEach(col => notifyListeners(col));
+    };
+
+    if (isOffline) {
+      await applyLocallyAndQueue();
+      return;
+    }
+
+    try {
+      await apiFetch('/api/db-batch/transaction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ writes: this.writes })
+      });
+      // Mirror locally into IndexedDB
+      for (const op of this.writes) {
+        if (op.type === 'set') {
+          let toSave = op.data;
+          if (op.merge) {
+            const existing = (await getDocLocally(op.collection, op.id)) || docCache.get(`${op.collection}::${op.id}`)?.data;
+            toSave = { ...(existing || {}), ...op.data };
+          }
+          saveDocLocally(op.collection, op.id, toSave).catch(() => {});
+          docCache.set(`${op.collection}::${op.id}`, { data: toSave, timestamp: Date.now() });
+        } else if (op.type === 'update') {
+          const existing = (await getDocLocally(op.collection, op.id)) || docCache.get(`${op.collection}::${op.id}`)?.data;
+          const merged = { ...(existing || {}), ...op.data };
+          saveDocLocally(op.collection, op.id, merged).catch(() => {});
+          docCache.set(`${op.collection}::${op.id}`, { data: merged, timestamp: Date.now() });
+        } else if (op.type === 'delete') {
+          deleteDocLocally(op.collection, op.id).catch(() => {});
+          docCache.delete(`${op.collection}::${op.id}`);
+        }
+      }
+      const colNames = Array.from(new Set(this.writes.map(w => w.collection)));
+      colNames.forEach(col => notifyListeners(col));
+    } catch (err: any) {
+      const isNetworkError = (typeof navigator !== 'undefined' && !navigator.onLine) ||
+        err?.message?.includes('Failed to fetch') ||
+        err?.name === 'TypeError';
+      if (isNetworkError) {
+        await applyLocallyAndQueue();
+        return;
+      }
+      console.error("Batch commit failed:", err);
+      throw err;
+    }
   }
-  }
+}
 
 export function writeBatch(db: any) {
   return new MockWriteBatch();
+}
+
+/**
+ * Pre-cache critical reference collections into IndexedDB
+ * so user has complete inventory, customers, vendors, branches offline.
+ */
+export async function warmUpOfflineCache(branchId?: string): Promise<void> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+  const targetCols = [
+    'branches',
+    'customers',
+    'vendors',
+    'employees',
+    'settings',
+    'salesmen',
+    'counters',
+    'expenseAccountHeads'
+  ];
+
+  for (const col of targetCols) {
+    try {
+      await getDocs(collection(null, col));
+    } catch {}
+  }
+
+  // Preload inventory
+  try {
+    if (branchId) {
+      await getDocs(query(collection(null, 'inventory'), where('branchId', '==', branchId)));
+    }
+    await getDocs(collection(null, 'inventory'));
+  } catch {}
 }
 
 export async function enableIndexedDbPersistence() {

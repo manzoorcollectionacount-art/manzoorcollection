@@ -593,74 +593,78 @@ export function Payroll() {
 
       {/* DEDICATED ALL-COMBINED PRINT VIEW (ONLY VISIBLE ON PRINT) */}
       {!selectedPrintSlip && (
-        <div id="payroll-print-content" className="hidden print:block print:bg-white print:w-full print:static print:z-auto print:h-auto print:p-0 text-black">
+        <div id="payroll-print-content" className="hidden print:block print:bg-white print:w-full print:static print:z-auto print:h-auto print:p-0 text-black font-sans" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
           <div className="text-center border-b-2 border-black pb-4 mb-5">
-            <h1 className="text-3xl font-black font-serif uppercase tracking-widest text-black">
+            <h1 className="text-3xl font-black uppercase tracking-widest text-black mb-1" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
                {activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 'Manzoor Collection')}
             </h1>
-            <h2 className="text-xl font-black text-black mt-1 uppercase tracking-wider">Payroll Register - {activeFolderMonth || month}</h2>
-            <p className="text-xs font-bold text-black mt-1">Printed on {new Date().toLocaleString()}</p>
+            <h2 className="text-xl font-black text-black mt-1 uppercase tracking-wider" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
+              Payroll Register - {activeFolderMonth || month}
+            </h2>
+            <p className="text-xs font-bold text-black mt-1" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
+              Printed on {new Date().toLocaleString()}
+            </p>
           </div>
 
-          <table className="w-full text-xs mb-8 border-2 border-black border-collapse">
+          <table className="w-full text-xs mb-8 border-2 border-black border-collapse" style={{ borderColor: '#000000' }}>
             <thead className="bg-slate-200 border-b-2 border-black">
-              <tr className="text-left font-black text-black uppercase tracking-wider text-[11px]">
-                <th className="px-2.5 py-2.5 border border-black font-black text-black">Employee Name</th>
-                <th className="px-2 py-2.5 border border-black text-center font-black text-black">Days</th>
-                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Monthly Salary</th>
-                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">This Month Salary</th>
-                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Previous Advance</th>
-                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Deductions</th>
-                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Advance Given</th>
-                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Remaining Adv</th>
-                <th className="px-2.5 py-2.5 border border-black text-right font-black text-black">Net Payable</th>
-                <th className="px-2 py-2.5 border border-black text-center font-black text-black">Status</th>
-                <th className="px-3 py-2.5 border border-black text-center font-black text-black">Signature</th>
+              <tr className="text-left font-black text-black uppercase tracking-wider text-[11px]" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
+                <th className="px-2.5 py-2.5 border-2 border-black font-black text-black">Employee Name</th>
+                <th className="px-2 py-2.5 border-2 border-black text-center font-black text-black">Days</th>
+                <th className="px-2.5 py-2.5 border-2 border-black text-right font-black text-black">Monthly Salary</th>
+                <th className="px-2.5 py-2.5 border-2 border-black text-right font-black text-black">This Month Salary</th>
+                <th className="px-2.5 py-2.5 border-2 border-black text-right font-black text-black">Previous Advance</th>
+                <th className="px-2.5 py-2.5 border-2 border-black text-right font-black text-black">Deductions</th>
+                <th className="px-2.5 py-2.5 border-2 border-black text-right font-black text-black">Advance Given</th>
+                <th className="px-2.5 py-2.5 border-2 border-black text-right font-black text-black">Remaining Adv</th>
+                <th className="px-2.5 py-2.5 border-2 border-black text-right font-black text-black">Net Payable</th>
+                <th className="px-2 py-2.5 border-2 border-black text-center font-black text-black">Status</th>
+                <th className="px-3 py-2.5 border-2 border-black text-center font-black text-black">Signature</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-black text-black">
+            <tbody className="divide-y divide-black text-black" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
               {payslips.length === 0 ? (
-                <tr><td colSpan={11} className="px-4 py-8 text-center text-black font-black text-lg border border-black">No payroll records found.</td></tr>
+                <tr><td colSpan={11} className="px-4 py-8 text-center text-black font-black text-lg border-2 border-black">No payroll records found.</td></tr>
               ) : (
                 filteredPayslips.map(slip => (
-                  <tr key={slip.id} className="border-b border-black text-black">
-                    <td className="px-2.5 py-2.5 font-black text-black border border-black">{slip.employeeName}</td>
-                    <td className="px-2 py-2.5 text-center font-mono font-bold text-black border border-black">{slip.days || '-'}</td>
-                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{(employees.find(e => e.id === slip.employeeId)?.monthlySalary || 0).toLocaleString()}</td>
-                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{slip.baseSalary.toLocaleString()}</td>
-                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{(slip.previousAdvance !== undefined ? slip.previousAdvance : (employees.find(e => e.id === slip.employeeId)?.advanceBalance || 0)).toLocaleString()}</td>
-                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{(slip.advances || 0).toLocaleString()}</td>
-                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{(slip.recentAdvance || 0).toLocaleString()}</td>
-                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border border-black">{(slip.remainingAdvance !== undefined ? slip.remainingAdvance : ((employees.find(e => e.id === slip.employeeId)?.advanceBalance || 0) - (slip.advances || 0) + (slip.recentAdvance || 0))).toLocaleString()}</td>
-                    <td className="px-2.5 py-2.5 text-right font-mono font-black text-black border border-black">PKR {slip.netPayable.toLocaleString()}</td>
-                    <td className="px-2 py-2.5 text-center border border-black text-xs font-black uppercase text-black">
+                  <tr key={slip.id} className="border-b border-black text-black font-bold">
+                    <td className="px-2.5 py-2.5 font-black text-black border-2 border-black">{slip.employeeName}</td>
+                    <td className="px-2 py-2.5 text-center font-mono font-bold text-black border-2 border-black">{slip.days || '-'}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border-2 border-black">{(employees.find(e => e.id === slip.employeeId)?.monthlySalary || 0).toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border-2 border-black">{slip.baseSalary.toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border-2 border-black">{(slip.previousAdvance !== undefined ? slip.previousAdvance : (employees.find(e => e.id === slip.employeeId)?.advanceBalance || 0)).toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border-2 border-black">{(slip.advances || 0).toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border-2 border-black">{(slip.recentAdvance || 0).toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-bold text-black border-2 border-black">{(slip.remainingAdvance !== undefined ? slip.remainingAdvance : ((employees.find(e => e.id === slip.employeeId)?.advanceBalance || 0) - (slip.advances || 0) + (slip.recentAdvance || 0))).toLocaleString()}</td>
+                    <td className="px-2.5 py-2.5 text-right font-mono font-black text-black border-2 border-black">PKR {slip.netPayable.toLocaleString()}</td>
+                    <td className="px-2 py-2.5 text-center border-2 border-black text-xs font-black uppercase text-black">
                        {slip.paymentStatus || 'Pending'}
                     </td>
-                    <td className="px-2 py-2.5 text-center align-bottom border border-black">
+                    <td className="px-2 py-2.5 text-center align-bottom border-2 border-black">
                       <div className="w-24 mx-auto border-b-2 border-black pt-4"></div>
                     </td>
                   </tr>
                 ))
               )}
               {payslips.length > 0 && (
-                <tr className="bg-slate-200 font-black border-t-2 border-b-2 border-black text-xs text-black">
-                  <td className="px-2.5 py-3 text-right text-black uppercase tracking-wider border border-black font-black">Total Amounts</td>
-                  <td className="px-2 py-3 text-center font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.days || 0), 0)}</td>
-                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (employees.find(e => e.id === s.employeeId)?.monthlySalary || 0), 0).toLocaleString()}</td>
-                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + s.baseSalary, 0).toLocaleString()}</td>
-                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.previousAdvance !== undefined ? s.previousAdvance : (employees.find(e => e.id === s.employeeId)?.advanceBalance || 0)), 0).toLocaleString()}</td>
-                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.advances || 0), 0).toLocaleString()}</td>
-                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.recentAdvance || 0), 0).toLocaleString()}</td>
-                  <td className="px-2.5 py-3 text-right font-mono text-black border border-black font-black"></td>
-                  <td className="px-2.5 py-3 text-right font-mono font-black text-black border border-black">PKR {filteredPayslips.reduce((sum, s) => sum + s.netPayable, 0).toLocaleString()}</td>
-                  <td className="px-2 py-3 border border-black"></td>
-                  <td className="px-2 py-3 border border-black"></td>
+                <tr className="bg-slate-200 font-black border-t-2 border-b-2 border-black text-xs text-black" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
+                  <td className="px-2.5 py-3 text-right text-black uppercase tracking-wider border-2 border-black font-black">Total Amounts</td>
+                  <td className="px-2 py-3 text-center font-mono text-black border-2 border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.days || 0), 0)}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border-2 border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (employees.find(e => e.id === s.employeeId)?.monthlySalary || 0), 0).toLocaleString()}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border-2 border-black font-black">{filteredPayslips.reduce((sum, s) => sum + s.baseSalary, 0).toLocaleString()}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border-2 border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.previousAdvance !== undefined ? s.previousAdvance : (employees.find(e => e.id === s.employeeId)?.advanceBalance || 0)), 0).toLocaleString()}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border-2 border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.advances || 0), 0).toLocaleString()}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border-2 border-black font-black">{filteredPayslips.reduce((sum, s) => sum + (s.recentAdvance || 0), 0).toLocaleString()}</td>
+                  <td className="px-2.5 py-3 text-right font-mono text-black border-2 border-black font-black"></td>
+                  <td className="px-2.5 py-3 text-right font-mono font-black text-black border-2 border-black">PKR {filteredPayslips.reduce((sum, s) => sum + s.netPayable, 0).toLocaleString()}</td>
+                  <td className="px-2 py-3 border-2 border-black"></td>
+                  <td className="px-2 py-3 border-2 border-black"></td>
                 </tr>
               )}
             </tbody>
           </table>
 
-          <div className="mt-12 flex justify-between items-end px-6 text-black">
+          <div className="mt-12 flex justify-between items-end px-6 text-black" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
             <div className="text-center">
               <div className="w-52 border-b-2 border-black mb-1.5"></div>
               <p className="text-xs font-black uppercase tracking-wider text-black">Accountant / Manager Signature</p>
@@ -671,34 +675,33 @@ export function Payroll() {
             </div>
           </div>
 
-          <div className="mt-8 text-center text-xs font-bold text-black italic">
+          <div className="mt-8 text-center text-xs font-bold text-black italic" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
             This payroll register is a computer-generated official document.
           </div>
         </div>
       )}
 
-
       {selectedPrintSlip && (
-        <div id="individual-payslip-print" className="hidden print:block print:bg-white print:w-full print:static print:z-auto print:h-auto print:p-0 text-black">
-          <div className="max-w-2xl mx-auto border-2 border-black p-8 text-black">
+        <div id="individual-payslip-print" className="hidden print:block print:bg-white print:w-full print:static print:z-auto print:h-auto print:p-0 text-black font-sans" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
+          <div className="max-w-2xl mx-auto border-2 border-black p-8 text-black" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
             <div className="text-center border-b-2 border-black pb-6 mb-6">
-              <h1 className="text-3xl font-black uppercase tracking-widest text-black mb-1">
+              <h1 className="text-3xl font-black uppercase tracking-widest text-black mb-1" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
                 {activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 'Manzoor Collection')}
               </h1>
               {(branches.find(b => b.id === activeBranchId)?.phone || branches.find(b => b.id === activeBranchId)?.phone2) && (
-                <p className="text-sm font-bold text-black mb-0.5">
+                <p className="text-sm font-bold text-black mb-0.5" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
                   {branches.find(b => b.id === activeBranchId)?.phone && <span>Phone 1: {branches.find(b => b.id === activeBranchId)?.phone}</span>}
                   {branches.find(b => b.id === activeBranchId)?.phone && branches.find(b => b.id === activeBranchId)?.phone2 && <span> | </span>}
                   {branches.find(b => b.id === activeBranchId)?.phone2 && <span>Phone 2: {branches.find(b => b.id === activeBranchId)?.phone2}</span>}
                 </p>
               )}
               {branches.find(b => b.id === activeBranchId)?.address && (
-                <p className="text-sm font-bold text-black mb-1">
+                <p className="text-sm font-bold text-black mb-1" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
                   {branches.find(b => b.id === activeBranchId)?.address}
                 </p>
               )}
               {branches.find(b => b.id === activeBranchId)?.onlinePhone && (
-                <p className="text-sm font-bold text-black mb-1">
+                <p className="text-sm font-bold text-black mb-1" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
                   Online Support: {branches.find(b => b.id === activeBranchId)?.onlinePhone}
                 </p>
               )}
@@ -725,19 +728,19 @@ export function Payroll() {
             <table className="w-full text-sm mb-6 border-2 border-black border-collapse">
               <thead className="bg-slate-200 border-b-2 border-black text-black">
                 <tr>
-                  <th className="py-2.5 px-4 text-left font-black text-black uppercase tracking-wider border-r border-black">Description</th>
+                  <th className="py-2.5 px-4 text-left font-black text-black uppercase tracking-wider border-r-2 border-black">Description</th>
                   <th className="py-2.5 px-4 text-right font-black text-black uppercase tracking-wider">Amount (PKR)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-black text-black font-semibold">
                 <tr className="border-b border-black">
-                  <td className="py-3 px-4 font-bold text-black border-r border-black">
+                  <td className="py-3 px-4 font-bold text-black border-r-2 border-black">
                     Monthly Salary (Full Month Rate)
                   </td>
                   <td className="py-3 px-4 text-right font-mono font-bold text-black">{(employees.find(e => e.id === selectedPrintSlip.employeeId)?.monthlySalary || 0).toLocaleString()}</td>
                 </tr>
                 <tr className="border-b border-black bg-slate-100 font-bold">
-                  <td className="py-3 px-4 flex items-center justify-between text-black font-black border-r border-black">
+                  <td className="py-3 px-4 flex items-center justify-between text-black font-black border-r-2 border-black">
                     <span>This Month Salary</span>
                     {selectedPrintSlip.days && <span className="text-xs font-bold text-black ml-2">({selectedPrintSlip.days} Working Days)</span>}
                   </td>
@@ -745,25 +748,25 @@ export function Payroll() {
                 </tr>
                 {(selectedPrintSlip.previousAdvance !== undefined ? selectedPrintSlip.previousAdvance : (employees.find(e => e.id === selectedPrintSlip.employeeId)?.advanceBalance || '') > 0) && (
                   <tr className="border-b border-black">
-                    <td className="py-3 px-4 font-bold text-black border-r border-black">Previous Advance (Owed before this payroll)</td>
+                    <td className="py-3 px-4 font-bold text-black border-r-2 border-black">Previous Advance (Owed before this payroll)</td>
                     <td className="py-3 px-4 text-right font-mono font-bold text-black">{(selectedPrintSlip.previousAdvance !== undefined ? selectedPrintSlip.previousAdvance : (employees.find(e => e.id === selectedPrintSlip.employeeId)?.advanceBalance || 0)).toLocaleString()}</td>
                   </tr>
                 )}
                 {selectedPrintSlip.advances > 0 && (
                   <tr className="border-b border-black">
-                    <td className="py-3 px-4 font-bold text-black border-r border-black">Advance Deduction (Deducted from Salary)</td>
+                    <td className="py-3 px-4 font-bold text-black border-r-2 border-black">Advance Deduction (Deducted from Salary)</td>
                     <td className="py-3 px-4 text-right font-mono font-black text-black">-{(selectedPrintSlip.advances || 0).toLocaleString()}</td>
                   </tr>
                 )}
                 {selectedPrintSlip.recentAdvance > 0 && (
                   <tr className="border-b border-black">
-                    <td className="py-3 px-4 font-bold text-black border-r border-black">New Advance Given Now</td>
+                    <td className="py-3 px-4 font-bold text-black border-r-2 border-black">New Advance Given Now</td>
                     <td className="py-3 px-4 text-right font-mono font-black text-black">+{(selectedPrintSlip.recentAdvance || 0).toLocaleString()}</td>
                   </tr>
                 )}
                 {((selectedPrintSlip.remainingAdvance !== undefined ? selectedPrintSlip.remainingAdvance : ((employees.find(e => e.id === selectedPrintSlip.employeeId)?.advanceBalance || 0) - (selectedPrintSlip.advances || 0) + (selectedPrintSlip.recentAdvance || 0))) > 0) && (
                   <tr className="border-t-2 border-b-2 border-black bg-slate-100 font-bold">
-                    <td className="py-2.5 px-4 font-black text-black text-xs uppercase tracking-wider border-r border-black">Remaining Advance Balance</td>
+                    <td className="py-2.5 px-4 font-black text-black text-xs uppercase tracking-wider border-r-2 border-black">Remaining Advance Balance</td>
                     <td className="py-2.5 px-4 text-right font-mono font-black text-black">{(selectedPrintSlip.remainingAdvance !== undefined ? selectedPrintSlip.remainingAdvance : ((employees.find(e => e.id === selectedPrintSlip.employeeId)?.advanceBalance || 0) - (selectedPrintSlip.advances || 0) + (selectedPrintSlip.recentAdvance || 0))).toLocaleString()}</td>
                   </tr>
                 )}
@@ -794,15 +797,15 @@ export function Payroll() {
       )}
 
       {selectedPrintSlip && (
-        <div id="individual-payslip-thermal-print" className="hidden print:block print:bg-white text-black" style={{ fontFamily: 'monospace' }}>
-          <div className="p-3 text-black text-xs font-bold leading-tight">
+        <div id="individual-payslip-thermal-print" className="hidden print:block print:bg-white text-black font-mono" style={{ color: '#000000', WebkitTextFillColor: '#000000', fontFamily: 'monospace' }}>
+          <div className="p-3 text-black text-xs font-bold leading-tight" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
             <div className="text-center mb-3">
               <h1 className="text-base font-black uppercase tracking-wider text-black">{activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 'Business')}</h1>
               <p className="text-sm font-black text-black">SALARY SLIP - {selectedPrintSlip.month}</p>
               <div className="border-b-2 border-black border-dashed my-2"></div>
             </div>
 
-            <div className="space-y-1.5 font-bold text-black">
+            <div className="space-y-1.5 font-bold text-black" style={{ color: '#000000', WebkitTextFillColor: '#000000' }}>
               <p><strong>Employee:</strong> <span className="font-black text-sm">{selectedPrintSlip.employeeName}</span></p>
               <p><strong>Date:</strong> {new Date(selectedPrintSlip.date).toLocaleDateString()}</p>
               {selectedPrintSlip.days && <p><strong>Days:</strong> {selectedPrintSlip.days} Working Days</p>}
@@ -840,16 +843,16 @@ export function Payroll() {
               <div className="mt-6 flex justify-between pt-6 text-black font-bold">
                 <div className="text-center">
                   <div className="w-20 border-b-2 border-black mb-1"></div>
-                  <p className="text-[9px] font-black uppercase text-black">Employer</p>
+                  <p className="text-[10px] font-black uppercase text-black">Employer</p>
                 </div>
                 <div className="text-center">
                   <div className="w-20 border-b-2 border-black mb-1"></div>
-                  <p className="text-[9px] font-black uppercase text-black">Labour</p>
+                  <p className="text-[10px] font-black uppercase text-black">Labour</p>
                 </div>
               </div>
             </div>
 
-            <div className="mt-4 text-center text-[10px] font-bold text-black">
+            <div className="mt-4 text-center text-xs font-bold text-black">
               <p>Printed: {new Date().toLocaleString()}</p>
             </div>
           </div>

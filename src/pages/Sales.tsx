@@ -137,6 +137,7 @@ export function Sales() {
   const [splitOnlineAmount, setSplitOnlineAmount] = useState<number | ''>('');
   const [courier, setCourier] = useState('');
   const [courierVendorId, setCourierVendorId] = useState('');
+  const [codCashReceived, setCodCashReceived] = useState(false);
   const [trackingNumber, setTrackingNumber] = useState('');
   const [shippingAddress, setShippingAddress] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
@@ -682,8 +683,9 @@ export function Sales() {
     const discount = Number(discountAmount) || 0;
     const shipping = saleType === 'Online' ? (Number(shippingCost) || 0) : 0;
     const total = subtotal + shipping - discount - returnedVal;
+    const onlineAdvanceAmt = Number(advanceAmount) || 0;
     const finalReceived = saleType === 'Online' 
-      ? (Number(advanceAmount) || 0)
+      ? (codCashReceived ? total : onlineAdvanceAmt)
       : (paymentMethod === 'Split' ? (Number(splitCashAmount) || 0) + (Number(splitOnlineAmount) || 0) : (receivedAmount === '' ? 0 : Number(receivedAmount)));
 
     const actualCustomerName = selectedCustomerId ? customers.find(c => c.id === selectedCustomerId)?.name || customerName : customerName;
@@ -754,6 +756,7 @@ export function Sales() {
       subtotal,
       courier: saleType === 'Online' ? (resolvedCourier || null) : null,
       courierVendorId: saleType === 'Online' ? (resolvedCourierVendorId || null) : null,
+      codCashReceived: saleType === 'Online' ? !!codCashReceived : false,
       trackingNumber: saleType === 'Online' ? trackingNumber : null,
       shippingAddress: saleType === 'Online' ? shippingAddress : null,
       customerPhone: customerPhone || null,
@@ -1028,7 +1031,8 @@ export function Sales() {
           });
         }
 
-        if (finalReceived > 0) {
+        const initialPaymentAmount = saleType === 'Online' ? onlineAdvanceAmt : finalReceived;
+        if (initialPaymentAmount > 0) {
           const actualPaymentMethod = saleType === 'Online' ? advancePaymentMethod : paymentMethod;
           const actualVendorId = saleType === 'Online' 
             ? (advanceDirectVendorPaymentId || directVendorPaymentId || null) 
@@ -1050,7 +1054,7 @@ export function Sales() {
                 category: transactionType === 'Return' ? 'Sale Return' : 'Sale Payment',
                 saleType: saleType || 'In-Store',
                 type: transactionType === 'Return' ? 'OUT' : 'IN',
-                amount: transactionType === 'Return' ? Math.abs(totalValue) * (cashReceived/finalReceived) : cashReceived,
+                amount: transactionType === 'Return' ? Math.abs(totalValue) * (cashReceived/initialPaymentAmount) : cashReceived,
                 reference: `Inv #${invoiceNoRef} - Cash`,
                 createdAt: Timestamp.now(),
                 tenantId: user?.tenantId || user?.uid, 
@@ -1069,7 +1073,7 @@ export function Sales() {
                 category:  transactionType === 'Return' ? 'Sale Return' : 'Sale Payment',
                 saleType: saleType || 'In-Store',
                 type: transactionType === 'Return' ? 'OUT' : 'IN',
-                amount:  transactionType === 'Return' ? Math.abs(totalValue) * (onlineReceived/finalReceived) : onlineReceived,
+                amount:  transactionType === 'Return' ? Math.abs(totalValue) * (onlineReceived/initialPaymentAmount) : onlineReceived,
                 reference:  `Inv #${invoiceNoRef} - Online${vendorObj ? ` (${vendorObj.name})` : (actualAccountName ? ` (${actualAccountName})` : '')}`,
                 createdAt: Timestamp.now(),
                 tenantId: user?.tenantId || user?.uid, 
@@ -1130,7 +1134,7 @@ export function Sales() {
                category:  transactionType === 'Return' ? 'Sale Return' : (saleType === 'Online' && Number(advanceAmount) > 0 ? 'Advance Payment' : 'Sale Payment'),
                saleType: saleType || 'In-Store',
                type: transactionType === 'Return' ? 'OUT' : 'IN',
-               amount:  transactionType === 'Return' ? Math.abs(totalValue) : finalReceived,
+               amount:  transactionType === 'Return' ? Math.abs(totalValue) : initialPaymentAmount,
                reference:  (saleType === 'Online' && Number(advanceAmount) > 0) 
                  ? `Inv #${invoiceNoRef} - Advance: ${partyRef}` 
                  : `Inv #${invoiceNoRef} - ${partyRef}`,
@@ -1151,7 +1155,7 @@ export function Sales() {
                  description: `Inv #${invoiceNoRef} - ${normHead} to Owner Account - Customer: ${actualCustomerName || 'Walk-in'}${descSuffix}`,
                  category: 'Owner Transfer',
                  type: 'OUT',
-                 amount: finalReceived,
+                 amount: initialPaymentAmount,
                  reference: `Inv #${invoiceNoRef} - ${normHead}`,
                  createdAt: Timestamp.now(),
                  tenantId: user?.tenantId || user?.uid, 
@@ -1163,7 +1167,7 @@ export function Sales() {
                  branchId: branchToUse,
                  date: new Date(transactionDate).getTime(),
                  type: 'OUT',
-                 amount: finalReceived,
+                 amount: initialPaymentAmount,
                  ownerName: 'Manzoor Ahmed (Owner)',
                  handledBy: salesmanId ? salesmen.find(s => s.id === salesmanId)?.name || 'Cashier' : 'Cashier',
                  category: isCashPayment ? 'Sale Payment' : 'Online Received',
@@ -1180,24 +1184,27 @@ export function Sales() {
           }
         }
 
-        if (saleType === 'Online' && transactionType === 'Sale' && resolvedCourierVendorId) {
-          const remainingCOD = totalValue - finalReceived;
+        if (saleType === 'Online' && transactionType === 'Sale' && (resolvedCourierVendorId || codCashReceived)) {
+          const remainingCOD = Math.max(0, totalValue - onlineAdvanceAmt);
           if (remainingCOD > 0) {
             const codLedgerRef = doc(collection(db, 'ledger'));
             transaction.set(codLedgerRef, {
               branchId: branchToUse,
-              vendorId: resolvedCourierVendorId,
+              vendorId: resolvedCourierVendorId || null,
               customerId: selectedCustomerId || null,
               date: new Date(transactionDate).getTime(),
-              description:  `COD Pending from Courier (${resolvedCourier || 'PostEx'}) for Inv #${invoiceNoRef}${descSuffix}`,
+              description: codCashReceived
+                ? `COD Cash Received from Courier (${resolvedCourier || 'PostEx'}) for Inv #${invoiceNoRef}${descSuffix}`
+                : `COD Pending from Courier (${resolvedCourier || 'PostEx'}) for Inv #${invoiceNoRef}${descSuffix}`,
               category: 'Courier COD',
               type: 'IN',
               amount: remainingCOD,
-              reference:  `Inv #${invoiceNoRef} - Customer: ${actualCustomerName || 'Walk-in'}`,
+              reference: `Inv #${invoiceNoRef} - Customer: ${actualCustomerName || 'Walk-in'}${codCashReceived ? ' (Cash Received)' : ''}`,
               createdAt: Timestamp.now(),
               tenantId: user?.tenantId || user?.uid,
               saleId: finalSaleId,
-              saleType: 'Online'
+              saleType: 'Online',
+              cashReceived: !!codCashReceived
             });
           }
         }
@@ -1263,6 +1270,7 @@ export function Sales() {
       setReceivedAmount('');
       setCourier('');
       setCourierVendorId('');
+      setCodCashReceived(false);
       setTrackingNumber('');
       setShippingAddress('');
       setCustomerPhone('');
@@ -1310,6 +1318,7 @@ export function Sales() {
     setReceivedAmount(sale.received !== undefined ? sale.received : sale.total);
     setCourier(sale.courier || '');
     setCourierVendorId(sale.courierVendorId || '');
+    setCodCashReceived(!!sale.codCashReceived || (sale.saleType === 'Online' && Number(sale.total || 0) > 0 && Number(sale.received || 0) >= Number(sale.total || 0)));
     setTrackingNumber(sale.trackingNumber || '');
     setShippingAddress(sale.shippingAddress || '');
     setCustomerPhone(sale.customerPhone || '');
@@ -1544,6 +1553,7 @@ export function Sales() {
                   setReceivedAmount('');
                   setCourier('');
                   setCourierVendorId('');
+                  setCodCashReceived(false);
                   setTrackingNumber('');
                   setShippingAddress('');
                   setCustomerPhone('');
@@ -1732,7 +1742,18 @@ export function Sales() {
                     </select>
                   </div>
                   <div className="md:col-span-2">
-                    <label className="block text-[10px] uppercase tracking-widest text-indigo-500 font-bold mb-1">Courier / COD Ledger Account *</label>
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                      <label className="block text-[10px] uppercase tracking-widest text-indigo-500 font-bold">Courier / COD Ledger Account *</label>
+                      <label className="inline-flex items-center gap-1.5 cursor-pointer select-none bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-400 dark:border-emerald-700 px-2.5 py-0.5 rounded-full text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition shadow-2xs">
+                        <input
+                          type="checkbox"
+                          checked={codCashReceived}
+                          onChange={e => setCodCashReceived(e.target.checked)}
+                          className="w-4 h-4 rounded text-emerald-600 border-emerald-400 focus:ring-emerald-500 cursor-pointer"
+                        />
+                        <span>Cash Received (کیش وصول - ادھار نہ دکھائیں)</span>
+                      </label>
+                    </div>
                     <select 
                       value={courierVendorId} 
                       onChange={e => {
@@ -2734,7 +2755,7 @@ export function Sales() {
                     const grossTotal = saleSubtotal + shipping - discount - returnItemsTotal - lumpSumReturn;
                     
                     const recVal = saleType === 'Online' 
-                      ? (Number(advanceAmount) || 0) 
+                      ? (codCashReceived ? grossTotal : (Number(advanceAmount) || 0)) 
                       : (paymentMethod === 'Split' ? (Number(splitCashAmount) || 0) + (Number(splitOnlineAmount) || 0) : (receivedAmount === '' ? 0 : Number(receivedAmount)));
                     const balVal = grossTotal - recVal;
                     return (
@@ -2810,7 +2831,7 @@ export function Sales() {
                         {transactionType !== 'Return' && (
                           <div className="pt-2 border-t border-slate-200 dark:border-slate-700/60 space-y-1">
                             <div className="flex justify-between items-center text-emerald-600 dark:text-emerald-400 font-semibold">
-                              <span className="text-xs font-sans">{saleType === 'Online' ? 'Advance Received' : 'Amount Received'}:</span>
+                              <span className="text-xs font-sans">{saleType === 'Online' ? (codCashReceived ? 'Cash Received (PostEx / COD Cleared)' : 'Advance Received') : 'Amount Received'}:</span>
                               <span>PKR {(recVal || 0).toFixed(2)}</span>
                             </div>
                             {balVal > 0 ? (

@@ -43,6 +43,7 @@ export interface Sale {
   salesmanId?: string;
   salesmanName?: string;
   tenantId?: string;
+  codCashReceived?: boolean;
 }
 
 export interface Salesman {
@@ -127,6 +128,7 @@ export interface LedgerEntry {
   tenantId?: string;
   createdAt: any;
   saleType?: 'In-Store' | 'Online';
+  cashReceived?: boolean;
 }
 
 export interface Purchase {
