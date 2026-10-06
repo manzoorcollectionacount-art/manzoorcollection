@@ -1,21 +1,7 @@
-const CACHE_NAME = 'manzoor-pos-v2';
-const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icon.svg',
-  '/icon-192.png',
-  '/icon-512.png'
-];
+const CACHE_NAME = 'manzoor-pos-v4';
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS).catch((err) => {
-        console.warn('[SW] Precache partial warning:', err);
-      });
-    }).then(() => self.skipWaiting())
-  );
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -35,13 +21,25 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // 1. Skip non-HTTP(S)
-  if (!url.protocol.startsWith('http')) return;
+  // Skip non-HTTP(S) and non-GET
+  if (!url.protocol.startsWith('http') || event.request.method !== 'GET') return;
 
-  // 2. Bypass API calls - data caching & sync are handled via IndexedDB
+  // Never intercept API calls (handled by IndexedDB offline sync engine)
   if (url.pathname.startsWith('/api/')) return;
 
-  // 3. Navigation requests: Network-first with offline SPA fallback
+  // Never intercept Vite internal dev endpoints or node_modules/.vite/deps/
+  // Intercepting or caching Vite dev pre-bundled dependencies causes mismatched ?v= hashes and duplicate React instances
+  if (
+    url.pathname.includes('/node_modules/') ||
+    url.pathname.startsWith('/@vite/') ||
+    url.pathname.startsWith('/@react-refresh') ||
+    url.pathname.startsWith('/@fs/') ||
+    url.pathname.startsWith('/src/')
+  ) {
+    return;
+  }
+
+  // Navigation requests: Network-first with offline fallback
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request)
@@ -59,7 +57,7 @@ self.addEventListener('fetch', (event) => {
           if (cachedIndex) return cachedIndex;
           const cachedRoot = await caches.match('/');
           if (cachedRoot) return cachedRoot;
-          return new Response('Offline: App shell unavailable', {
+          return new Response('Offline Mode', {
             status: 503,
             headers: { 'Content-Type': 'text/plain' }
           });
@@ -68,20 +66,20 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4. Static assets (JS, CSS, images, fonts): Stale-While-Revalidate
+  // Production built assets (/assets/*, icons, manifest): Network-first with cache fallback
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      const fetchPromise = fetch(event.request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return networkResponse;
-        })
-        .catch(() => cachedResponse);
-
-      return cachedResponse || fetchPromise;
-    })
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const clone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
+        return networkResponse;
+      })
+      .catch(async () => {
+        const cachedResponse = await caches.match(event.request);
+        if (cachedResponse) return cachedResponse;
+        throw new Error('Asset unavailable offline');
+      })
   );
 });

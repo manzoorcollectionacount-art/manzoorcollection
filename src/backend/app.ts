@@ -69,13 +69,13 @@ app.post('/api/db/get', async (req, res) => {
 
     const dbPool = getPool();
     await ensureTable(dbPool, colName);
-    const result = await dbPool.query(`SELECT data FROM "${colName}" WHERE id = $1;`, [id]);
+    let result = await dbPool.query(`SELECT id, data FROM "${colName}" WHERE id = $1 OR data->>'id' = $1 LIMIT 1;`, [String(id)]);
     
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Document not found" });
     }
     
-    res.json({ id, data: result.rows[0].data });
+    res.json({ id: result.rows[0].id, data: { ...(result.rows[0].data || {}), id: result.rows[0].id } });
   } catch (error: any) {
     console.error("GET DB Error:", error);
     res.status(500).json({ error: error.message || "Failed to get document" });

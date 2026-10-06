@@ -8,17 +8,27 @@
     <title>Manzoor Collection</title>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-    
     <script>
       if ('serviceWorker' in navigator) {
+        if (window.caches) {
+          caches.keys().then((keys) => {
+            keys.forEach((k) => {
+              if (k !== 'manzoor-pos-v4') {
+                caches.delete(k);
+              }
+            });
+          });
+        }
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js')
-            .then(reg => console.log('Service Worker registered:', reg.scope))
+            .then(reg => {
+              reg.update();
+            })
             .catch(err => console.error('Service Worker registration failed:', err));
         });
       }
     </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

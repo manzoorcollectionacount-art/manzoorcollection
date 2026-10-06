@@ -16,9 +16,29 @@ export default defineConfig(({mode}) => {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
     resolve: {
+      dedupe: ['react', 'react-dom', 'react-router'],
       alias: [
         { find: /^firebase\/firestore$/, replacement: path.resolve(__dirname, 'src/lib/customFirestore.ts') },
         { find: '@', replacement: path.resolve(__dirname, '.') }
+      ]
+    },
+    optimizeDeps: {
+      include: [
+        'react',
+        'react-dom',
+        'react-dom/client',
+        'react/jsx-runtime',
+        'react/jsx-dev-runtime',
+        'react-router',
+        'react-hot-toast',
+        'lucide-react',
+        'clsx',
+        'date-fns',
+        'motion/react',
+        'recharts',
+        'react-barcode',
+        'firebase/app',
+        'firebase/auth'
       ]
     },
     server: {

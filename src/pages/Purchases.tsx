@@ -7,6 +7,7 @@ import { db, safeGetDocs, safeCollectionSnapshot } from '../lib/firebase';
 import { Plus, Printer, X, Receipt, Building2, Trash2, Edit } from 'lucide-react';
 import { printInvoice } from '../lib/print';
 import { format } from 'date-fns';
+import toast from 'react-hot-toast';
 
 import { Purchase, InventoryItem, Vendor } from '../types';
 
@@ -50,9 +51,9 @@ export function Purchases() {
       venQ = query(venQ, where('branchId', '==', activeBranchId));
     }
 
-    const unsubPurchases = safeCollectionSnapshot(q, (snap) => setPurchases(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as Purchase))));
-    const unsubInv = safeCollectionSnapshot(invQ, (snap) => setInventory(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as InventoryItem))));
-    const unsubVen = safeCollectionSnapshot(venQ, (snap) => setVendors(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as Vendor))));
+    const unsubPurchases = safeCollectionSnapshot(q, (snap) => setPurchases(snap.docs.map(d => ({ ...(d.data() as any), id: d.id } as Purchase))));
+    const unsubInv = safeCollectionSnapshot(invQ, (snap) => setInventory(snap.docs.map(d => ({ ...(d.data() as any), id: d.id } as InventoryItem))));
+    const unsubVen = safeCollectionSnapshot(venQ, (snap) => setVendors(snap.docs.map(d => ({ ...(d.data() as any), id: d.id } as Vendor))));
     
     return () => { unsubPurchases(); unsubInv(); unsubVen(); };
   }, [activeBranchId, user]);
@@ -73,29 +74,23 @@ export function Purchases() {
       setCurrentSalePrice(0);
       return;
     }
-    const item = inventory.find(i => i.id === val);
+    const item = inventory.find(i => String(i.id) === String(val));
     if (item) {
-      setCurrentCostPrice(item.cost || '');
-      setCurrentSalePrice(item.price || 0);
+      setCurrentCostPrice(Number(item.cost) || 0);
+      setCurrentSalePrice(Number(item.price) || 0);
     }
   };
 
   const handleAddItem = () => {
-    const item = inventory.find(i => i.id === currentItem);
+    const item = inventory.find(i => String(i.id) === String(currentItem));
     if (!item) return;
-    if (currentQty <= 0 || '') {
-      alert("Quantity must be greater than zero.");
+    if (isNaN(currentQty) || currentQty <= 0) {
+      toast.error("Quantity must be greater than zero.");
       return;
     }
-    if (isNaN(currentCostPrice) || 0) {
-      alert("Invalid cost price.");
-      return;
-    }
-    if (isNaN(currentSalePrice) || 0) {
-      alert("Invalid sale price.");
-      return;
-    }
-    setSelectedItems([...selectedItems, { id: item.id, name: item.name, qty: currentQty, price: currentCostPrice, salePrice: currentSalePrice }]);
+    const costVal = isNaN(currentCostPrice) ? 0 : Number(currentCostPrice);
+    const saleVal = isNaN(currentSalePrice) ? 0 : Number(currentSalePrice);
+    setSelectedItems([...selectedItems, { id: item.id, name: item.name, qty: Number(currentQty), price: costVal, salePrice: saleVal }]);
     setCurrentItem('');
     setCurrentQty(1);
     setCurrentCostPrice(0);
@@ -162,34 +157,45 @@ export function Purchases() {
         const invSnaps: Record<string, any> = {};
         for (const id of invRefs) {
            const snap = await transaction.get(doc(db, 'inventory', id));
-           if (snap.exists()) {
+           if (snap.exists() && snap.data()) {
               invSnaps[id] = snap.data();
-           } else if (selectedItems.find(i => i.id === id)) {
-              throw new Error(`Inventory item not found for update.`);
+           } else {
+              // Fallback to loaded inventory state (by ID or name) so available items never fail
+              const selectedItemObj = selectedItems.find(i => String(i.id) === String(id));
+              const localInv = inventory.find(i =>
+                String(i.id) === String(id) ||
+                (selectedItemObj && i.name?.trim().toLowerCase() === selectedItemObj.name?.trim().toLowerCase())
+              );
+              if (localInv) {
+                 invSnaps[id] = localInv;
+              }
            }
         }
         
         const newStockMap: Record<string, number> = {};
         const newCostMap: Record<string, number> = {};
         const newPriceMap: Record<string, number> = {};
+        const resolvedDocIds: Record<string, string> = {};
 
         for (const id of invRefs) {
-           let currentStock = invSnaps[id] ? invSnaps[id].stock : 0;
-           let currentCost = invSnaps[id] ? invSnaps[id].cost : 0;
-           let currentPrice = invSnaps[id] ? invSnaps[id].price : 0;
+           const snapData = invSnaps[id];
+           resolvedDocIds[id] = snapData?.id || id;
+           let currentStock = snapData ? Number(snapData.stock || 0) : 0;
+           let currentCost = snapData ? Number(snapData.cost || 0) : 0;
+           let currentPrice = snapData ? Number(snapData.price || 0) : 0;
            
            if (oldPurchase && oldPurchase.items) {
-              const oldItem = oldPurchase.items.find((i: any) => i.id === id);
+              const oldItem = oldPurchase.items.find((i: any) => String(i.id) === String(id));
               if (oldItem) {
-                 currentStock = currentStock - oldItem.qty; // Reverse the previous stock
+                 currentStock = currentStock - Number(oldItem.qty || 0); // Reverse the previous stock
               }
            }
            
-           const newItem = selectedItems.find(i => i.id === id);
+           const newItem = selectedItems.find(i => String(i.id) === String(id));
            if (newItem) {
-              currentStock = currentStock + newItem.qty;
-              currentCost = newItem.price; // Cost equals the purchase price
-              currentPrice = newItem.salePrice; // Retail price
+              currentStock = currentStock + Number(newItem.qty || 0);
+              currentCost = Number(newItem.price || 0); // Cost equals the purchase price
+              currentPrice = Number(newItem.salePrice || 0); // Retail price
            }
            
            newStockMap[id] = currentStock;
@@ -200,11 +206,26 @@ export function Purchases() {
         }
 
         for (const id of invRefs) {
-           if (invSnaps[id] !== undefined) {
-              const updates: any = { stock: newStockMap[id] };
-              if (newCostMap[id] !== undefined) updates.cost = newCostMap[id];
-              if (newPriceMap[id] !== undefined) updates.price = newPriceMap[id];
-              transaction.update(doc(db, 'inventory', id), updates);
+           const targetDocId = resolvedDocIds[id] || id;
+           const snapData = invSnaps[id];
+           const newItem = selectedItems.find(i => String(i.id) === String(id));
+           const updates: any = { stock: newStockMap[id] };
+           if (newCostMap[id] !== undefined) updates.cost = newCostMap[id];
+           if (newPriceMap[id] !== undefined) updates.price = newPriceMap[id];
+
+           if (snapData !== undefined) {
+              transaction.set(doc(db, 'inventory', targetDocId), { ...snapData, ...updates, id: targetDocId }, { merge: true });
+           } else if (newItem) {
+              transaction.set(doc(db, 'inventory', targetDocId), {
+                id: targetDocId,
+                branchId: branchToUse,
+                name: newItem.name,
+                sku: newItem.name.substring(0, 5).toUpperCase().replace(/[^A-Z0-9]/g, '') + '-' + Math.floor(Math.random() * 1000),
+                category: 'General',
+                minStockLevel: 10,
+                ...updates,
+                updatedAt: Timestamp.now()
+              }, { merge: true });
            }
         }
         
@@ -261,13 +282,14 @@ export function Purchases() {
       setShowAdd(false);
       setEditPurchaseId(null);
       setSelectedVendor('');
+      setSelectedItems([]);
       setPaymentMethod('Cash');
       setPaymentAccount('');
       setPurchaseDescription('');
-      alert(editPurchaseId ? 'Vendor Bill updated successfully!' : 'Vendor Bill saved successfully!');
+      toast.success(editPurchaseId ? 'Vendor Bill updated successfully!' : 'Vendor Bill saved successfully!');
     } catch (e: any) {
       console.error("Purchase Transaction Failed: ", e);
-      alert("Failed to save vendor bill: " + e.message);
+      toast.error("Failed to save vendor bill: " + e.message);
     } finally {
       setIsSubmitting(false);
     }

@@ -298,6 +298,14 @@ export async function getDocs(queryOrCol: any): Promise<MockQuerySnapshot> {
         })
       });
       queryCache.set(cacheKey, { data, timestamp: Date.now() });
+      const nowTs = Date.now();
+      if (Array.isArray(data)) {
+        for (const item of data) {
+          if (item && item.id) {
+            docCache.set(`${collectionName}::${item.id}`, { data: { ...item.data, id: item.id }, timestamp: nowTs });
+          }
+        }
+      }
       // Asynchronously cache in IndexedDB for offline use
       saveQueryLocally(collectionName, cacheKey, data).catch(() => {});
       return data;
@@ -472,6 +480,12 @@ if (typeof window !== 'undefined' && window.BroadcastChannel) {
       }
     });
   };
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('ais-offline-synced', () => {
+    notifyListeners();
+  });
 }
 
 export function notifyListeners(collectionName?: string) {
@@ -783,6 +797,18 @@ class MockTransaction {
     if (!data) {
       data = await getDocLocally(colName, id);
     }
+    if (!data) {
+      // Also check any active queryCache entries for this collection
+      for (const [qKey, qVal] of queryCache.entries()) {
+        if (qKey.startsWith(`${colName}::`) && Array.isArray(qVal.data)) {
+          const found = qVal.data.find((d: any) => String(d.id) === String(id) || String(d.data?.id) === String(id));
+          if (found) {
+            data = { ...(found.data || {}), id: found.id };
+            break;
+          }
+        }
+      }
+    }
     return new MockDocumentSnapshot(id, data, !!data, colName);
   }
   
@@ -1034,7 +1060,8 @@ export async function warmUpOfflineCache(branchId?: string): Promise<void> {
     'settings',
     'salesmen',
     'counters',
-    'expenseAccountHeads'
+    'expenseAccountHeads',
+    'onlineSalesEmployees'
   ];
 
   for (const col of targetCols) {
@@ -1043,13 +1070,17 @@ export async function warmUpOfflineCache(branchId?: string): Promise<void> {
     } catch {}
   }
 
-  // Preload inventory
-  try {
-    if (branchId) {
-      await getDocs(query(collection(null, 'inventory'), where('branchId', '==', branchId)));
-    }
-    await getDocs(collection(null, 'inventory'));
-  } catch {}
+  // Preload branch-scoped operational collections so offline pages have data ready
+  const branchScopedCols = ['inventory', 'sales', 'ledger', 'purchases', 'expenses'];
+  for (const col of branchScopedCols) {
+    try {
+      if (branchId) {
+        await getDocs(query(collection(null, col), where('branchId', '==', branchId)));
+      } else {
+        await getDocs(collection(null, col));
+      }
+    } catch {}
+  }
 }
 
 export async function enableIndexedDbPersistence() {

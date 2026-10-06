@@ -5,7 +5,7 @@ import { setDoc } from '../lib/customFirestore';
 import toast from 'react-hot-toast';
 import { auth, db, mainAuth, mainDb, safeDocSnapshot } from '../lib/firebase';
 
-export type UserRole = 'super_admin' | 'branch_admin' | 'staff' | 'billing_only' | 'limited_access' | 'sales_stock_only' | 'online_team' | 'new_limited_access' | 'cashier';
+export type UserRole = 'super_admin' | 'branch_admin' | 'staff' | 'billing_only' | 'limited_access' | 'sales_stock_only' | 'online_team' | 'new_limited_access' | 'cashier' | 'online_sale_login';
 
 export interface AppUser {
   uid: string;

@@ -67,7 +67,7 @@ export function Inventory() {
     const q = query(collection(db, 'inventory'), where('branchId', '==', activeBranchId));
 
     const unsub = safeCollectionSnapshot(q, (snap) => {
-      setItems(snap.docs.map(doc => ({ id: doc.id, ...(doc.data() || 0) } as InventoryItem)));
+      setItems(snap.docs.map(doc => ({ ...(doc.data() || {}), id: doc.id } as InventoryItem)));
     });
     return unsub;
   }, [activeBranchId, user]);

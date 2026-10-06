@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useBranch } from '../context/BranchContext';
 import { useSettings } from '../context/SettingsContext';
 import { InstallPWA } from './InstallPWA';
+import { OfflineSyncBadge, OfflineBanner } from './OfflineSyncBadge';
 import { 
   BuildingIcon, 
   LayoutDashboard, 
@@ -36,7 +37,7 @@ import {
 import { ThemeToggle } from './ThemeToggle';
 import clsx from 'clsx';
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, getDocs, getDoc, runTransaction, writeBatch } from '../lib/customFirestore';
+import { collection, query, where, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, getDocs, getDoc, runTransaction, writeBatch, warmUpOfflineCache } from '../lib/customFirestore';
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { auth, db, safeCollectionSnapshot } from '../lib/firebase';
 import toast from 'react-hot-toast';
@@ -66,6 +67,10 @@ export function Layout() {
       window.removeEventListener('ais-auth-session-required', handleAuthIssue);
     };
   }, []);
+
+  useEffect(() => {
+    warmUpOfflineCache(activeBranchId || undefined);
+  }, [activeBranchId]);
 
   const handleUnlockProfitLoss = (e: React.FormEvent) => {
     e.preventDefault();
@@ -142,8 +147,8 @@ export function Layout() {
     { name: 'Dashboard', href: '/', icon: LayoutDashboard, roles: ['super_admin', 'branch_admin', 'staff', 'limited_access', 'sales_stock_only', 'billing_only', 'new_limited_access', 'cashier'] },
     { name: 'Inventory', href: '/inventory', icon: Package, roles: ['super_admin', 'branch_admin', 'staff', 'limited_access', 'sales_stock_only', 'billing_only', 'new_limited_access', 'cashier'] },
     { name: 'Stock Transfer', href: '/stock-transfer', icon: ArrowRightLeft, roles: ['super_admin', 'branch_admin', 'staff', 'limited_access', 'sales_stock_only', 'billing_only', 'new_limited_access', 'cashier'] },
-    { name: 'Sales / Billing', href: '/sales', icon: ShoppingCart, roles: ['super_admin', 'branch_admin', 'staff', 'billing_only', 'limited_access', 'sales_stock_only', 'new_limited_access', 'cashier'] },
-    { name: 'Customers', href: '/customers', icon: Users, roles: ['super_admin', 'branch_admin', 'staff', 'billing_only', 'sales_stock_only', 'new_limited_access'] },
+    { name: 'Sales / Billing', href: '/sales', icon: ShoppingCart, roles: ['super_admin', 'branch_admin', 'staff', 'billing_only', 'limited_access', 'sales_stock_only', 'new_limited_access', 'cashier', 'online_sale_login', 'online_team'] },
+    { name: 'Customers', href: '/customers', icon: Users, roles: ['super_admin', 'branch_admin', 'staff', 'billing_only', 'sales_stock_only', 'new_limited_access', 'online_sale_login', 'online_team'] },
     { name: 'Purchases', href: '/purchases', icon: Truck, roles: ['super_admin', 'branch_admin', 'staff', 'limited_access', 'new_limited_access', 'cashier'] },
     { name: 'Vendors', href: '/vendors', icon: Building2, roles: ['super_admin', 'branch_admin', 'staff', 'limited_access', 'new_limited_access'] },
     { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },
@@ -159,8 +164,8 @@ export function Layout() {
     { name: 'Salesmen', href: '/salesmen', icon: UsersRound, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },
     { name: 'Payroll', href: '/payroll', icon: Banknote, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },
     { name: 'Users & Logins', href: '/users', icon: KeyRound, roles: ['super_admin', 'branch_admin'] },
-    { name: 'Online Employees', href: '/online-sales-employees', icon: Users, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },
-    { name: 'Online Sales Report', href: '/online-sales-report', icon: BarChart3, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },
+    { name: 'Online Employees', href: '/online-sales-employees', icon: Users, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'online_sale_login', 'online_team'] },
+    { name: 'Online Sales Report', href: '/online-sales-report', icon: BarChart3, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'online_sale_login', 'online_team'] },
   ];
 
 
@@ -366,6 +371,7 @@ export function Layout() {
           </div>
           <div className="flex items-center gap-4 text-sm font-medium text-slate-700 dark:text-slate-200">
             
+            <OfflineSyncBadge />
             <ThemeToggle />
             <InstallPWA className="!py-1.5 !px-3 !text-xs !bg-emerald-600 hover:!bg-emerald-700 hidden sm:flex" />
 
@@ -404,6 +410,7 @@ export function Layout() {
         </header>
 
         {/* Content area */}
+        <OfflineBanner />
         <div className="flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-950 flex flex-col print:overflow-visible print:bg-white print:block print:h-auto print:min-h-0 relative">
           <div className={clsx("flex-1 print:p-0 print:block print:h-auto print:min-h-0", location.pathname === '/' ? "p-0" : "p-8 space-y-6")}>
             <Outlet />

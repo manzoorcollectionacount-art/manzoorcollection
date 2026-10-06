@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Download, X, Share, ExternalLink, Smartphone, Laptop, Sparkles } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 export function InstallPWA({ className = '' }: { className?: string }) {
   const [supportsPWA, setSupportsPWA] = useState(false);
@@ -47,7 +48,7 @@ export function InstallPWA({ className = '' }: { className?: string }) {
     
     // If already standalone, don't do anything
     if (window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone) {
-      alert("App is already installed! / ایپ پہلے سے انسٹال ہے۔");
+      toast.success("App is already installed! / ایپ پہلے سے انسٹال ہے۔");
       return;
     }
 

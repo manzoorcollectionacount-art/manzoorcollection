@@ -141,8 +141,8 @@ export default function App() {
                   {/* Core Retail / Billing / Inventory / Stock Transfer */}
                   <Route path="inventory" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'staff', 'limited_access', 'sales_stock_only', 'billing_only', 'new_limited_access', 'cashier']}><Inventory /></ProtectedRoute>} />
                   <Route path="stock-transfer" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'staff', 'sales_stock_only', 'billing_only', 'new_limited_access', 'cashier']}><StockTransfer /></ProtectedRoute>} />
-                  <Route path="sales" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'staff', 'billing_only', 'limited_access', 'sales_stock_only', 'new_limited_access', 'cashier']}><Sales /></ProtectedRoute>} />
-                  <Route path="customers" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'staff', 'billing_only', 'sales_stock_only', 'limited_access', 'new_limited_access']}><Customers /></ProtectedRoute>} />
+                  <Route path="sales" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'staff', 'billing_only', 'limited_access', 'sales_stock_only', 'new_limited_access', 'cashier', 'online_sale_login', 'online_team']}><Sales /></ProtectedRoute>} />
+                  <Route path="customers" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'staff', 'billing_only', 'sales_stock_only', 'limited_access', 'new_limited_access', 'online_sale_login', 'online_team']}><Customers /></ProtectedRoute>} />
                   
                   {/* Operations & Procurement */}
                   <Route path="purchases" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'staff', 'limited_access', 'new_limited_access', 'cashier']}><Purchases /></ProtectedRoute>} />
@@ -159,8 +159,8 @@ export default function App() {
                   <Route path="reports" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access']}><Reports /></ProtectedRoute>} />
                   <Route path="profit-loss" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access']}><ProfitLossReport /></ProtectedRoute>} />
                   
-                  <Route path="online-sales-employees" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access']}><OnlineSalesEmployees /></ProtectedRoute>} />
-                  <Route path="online-sales-report" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access']}><OnlineSalesReport /></ProtectedRoute>} />
+                  <Route path="online-sales-employees" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'online_sale_login', 'online_team']}><OnlineSalesEmployees /></ProtectedRoute>} />
+                  <Route path="online-sales-report" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'online_sale_login', 'online_team']}><OnlineSalesReport /></ProtectedRoute>} />
                   <Route path="salesmen" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access']}><Salesmen /></ProtectedRoute>} />
                   <Route path="salesman-report" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access']}><SalesmanReport /></ProtectedRoute>} />
                   <Route path="customer-report" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'staff', 'limited_access', 'new_limited_access']}><CustomerDataReport /></ProtectedRoute>} />

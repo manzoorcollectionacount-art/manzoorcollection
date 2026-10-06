@@ -190,6 +190,7 @@ export function Users() {
       case 'billing_only': return 'Billing, Inventory & Stock';
       case 'limited_access': return 'Stock, Inventory, Labour & Payroll';
       case 'online_team': return 'Online Team (Order Processing & Sales)';
+      case 'online_sale_login': return 'Online Sale Login (Billing, Customers, Online Employees & Online Reports — No Dashboard)';
       case 'new_limited_access': return 'New Limited Access (Sales, Inventory, Labour & Payroll)';
       case 'cashier': return 'Casher Login (Dashboard, Inventory, Stock Transfer, Bills, Expenses, Purchase, Labour)';
       default: return r;
@@ -258,6 +259,7 @@ export function Users() {
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">System Role & Access</label>
               <select value={role} onChange={e => setRole(e.target.value as UserRole)} className="mt-1 block w-full rounded border-slate-300 dark:border-slate-600 py-2 px-3 bg-slate-50 dark:bg-slate-800/50 border outline-none font-medium">
                 <option value="sales_stock_only">Sales/Bill, Inventory & Stock Transfer (Recommended)</option>
+                <option value="online_sale_login">Online Sale Login (Billing, Customers, Online Employees & Online Reports — No Dashboard)</option>
                 <option value="billing_only">Billing, Inventory & Stock</option>
                 <option value="staff">Staff (Sales, Stock, Purchases, Vendors, Customers)</option>
                 <option value="online_team">Online Team (Order Processing & Sales)</option>
@@ -333,6 +335,7 @@ export function Users() {
                 className="w-full rounded border-slate-300 dark:border-slate-600 py-2 px-3 bg-slate-50 dark:bg-slate-800 border outline-none font-medium"
               >
                 <option value="sales_stock_only">Sales/Bill, Inventory & Stock Transfer (Recommended)</option>
+                <option value="online_sale_login">Online Sale Login (Billing, Customers, Online Employees & Online Reports — No Dashboard)</option>
                 <option value="billing_only">Billing, Inventory & Stock</option>
                 <option value="staff">Staff (Sales, Stock, Purchases, Vendors, Customers)</option>
                 <option value="online_team">Online Team (Order Processing & Sales)</option>
