@@ -88,6 +88,7 @@ export function Sales() {
     }
   });
   const { user } = useAuth();
+  const isOnlineOnlyUser = user?.role === 'online_sale_login' || user?.role === 'online_team';
   const { activeBranchId, branches } = useBranch();
   const { enableDeletion, enableBillEdit } = useSettings();
   const [sales, setSales] = useState<Sale[]>([]);
@@ -103,7 +104,7 @@ export function Sales() {
   const [customers, setCustomers] = useState<{id: string, name: string, phone?: string, city?: string}[]>([]);
 
   // Invoices logic
-  const [filterType, setFilterType] = useState<'All' | 'In-Store' | 'Online'>('All');
+  const [filterType, setFilterType] = useState<'All' | 'In-Store' | 'Online'>(isOnlineOnlyUser ? 'Online' : 'All');
   const [invoiceStartDate, setInvoiceStartDate] = useState(format(startOfDay(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)), 'yyyy-MM-dd'));
   const [invoiceEndDate, setInvoiceEndDate] = useState(format(endOfDay(new Date()), 'yyyy-MM-dd'));
   const [editSaleId, setEditSaleId] = useState<string | null>(null);
@@ -123,8 +124,15 @@ export function Sales() {
   const [salesmen, setSalesmen] = useState<any[]>([]);
   const [salesmanId, setSalesmanId] = useState('');
   const [onlineEmployeeId, setOnlineEmployeeId] = useState('');
-  const [saleType, setSaleType] = useState<'In-Store' | 'Online'>('In-Store');
+  const [saleType, setSaleType] = useState<'In-Store' | 'Online'>(isOnlineOnlyUser ? 'Online' : 'In-Store');
   const [advanceAmount, setAdvanceAmount] = useState<number | ''>('');
+
+  useEffect(() => {
+    if (isOnlineOnlyUser) {
+      setSaleType('Online');
+      setFilterType('Online');
+    }
+  }, [isOnlineOnlyUser]);
   const [advancePaymentMethod, setAdvancePaymentMethod] = useState<'Cash' | 'Online' | 'Owner Account' | 'Split'>('Cash');
   const [advancePaymentAccount, setAdvancePaymentAccount] = useState('Meezan Bank');
   const [advanceDescription, setAdvanceDescription] = useState('');
@@ -1256,7 +1264,7 @@ export function Sales() {
       setPaymentMethod('Cash');
       setPaymentAccount('Meezan Bank');
       setDirectVendorPaymentId('');
-      setSaleType('In-Store');
+      setSaleType(isOnlineOnlyUser ? 'Online' : 'In-Store');
       setAdvanceAmount('');
       setAdvancePaymentMethod('Cash');
       setAdvancePaymentAccount('Meezan Bank');
@@ -1304,7 +1312,7 @@ export function Sales() {
     setSplitOnlineAmount(sale.splitOnlineAmount || '');
     setPaymentAccount(sale.paymentAccount || '');
     setDirectVendorPaymentId(sale.directVendorPaymentId || '');
-    setSaleType(sale.saleType || 'In-Store');
+    setSaleType(isOnlineOnlyUser ? 'Online' : (sale.saleType || 'In-Store'));
     setAdvanceAmount(sale.advanceAmount !== undefined && sale.advanceAmount !== null ? sale.advanceAmount : (sale.saleType === 'Online' && sale.received !== undefined ? sale.received : ''));
     setAdvancePaymentMethod(sale.advancePaymentMethod || (sale.paymentMethod as any) || 'Cash');
     setAdvancePaymentAccount(sale.advancePaymentAccount || sale.paymentAccount || '');
@@ -1426,6 +1434,7 @@ export function Sales() {
     end.setHours(23, 59, 59, 999);
 
     const filtered = sales.filter(s => {
+      if (isOnlineOnlyUser && s.saleType !== 'Online') return false;
       return new Date(s.date || 0).getTime() >= start.getTime() && new Date(s.date || 0).getTime() <= end.getTime();
     });
 
@@ -1482,12 +1491,13 @@ export function Sales() {
   const reports = reportData();
 
   const todayStart = startOfDay(new Date());
-  const dailySales = sales.filter(s => {
+  const visibleSales = isOnlineOnlyUser ? sales.filter(s => s.saleType === 'Online') : sales;
+  const dailySales = visibleSales.filter(s => {
     return new Date(s.date || 0) >= todayStart;
   });
   const todaySaleCount = dailySales.length;
   const todaySaleAmount = dailySales.reduce((acc, s) => acc + (s.transactionType === 'Return' ? -Math.abs(s.total) : s.total), 0);
-  const totalReturnCount = sales.filter(s => s.transactionType === 'Return' || (s.returnedValue && s.returnedValue > 0) || (s.returnItems && s.returnItems.length > 0)).length;
+  const totalReturnCount = visibleSales.filter(s => s.transactionType === 'Return' || (s.returnedValue && s.returnedValue > 0) || (s.returnItems && s.returnItems.length > 0)).length;
 
   return (
     <>
@@ -1544,7 +1554,7 @@ export function Sales() {
                   setManualInvoiceNo('');
                   setPaymentMethod('Cash');
                   setPaymentAccount('');
-                  setSaleType('In-Store');
+                  setSaleType(isOnlineOnlyUser ? 'Online' : 'In-Store');
                   setTransactionType('Sale');
                   setTransactionDate(format(new Date(), "yyyy-MM-dd'T'HH:mm"));
                   setShippingCost(0);
@@ -1666,17 +1676,19 @@ export function Sales() {
                 <div>
                   <label className="block text-[10px] uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-1">Sale Type</label>
                   <div className="flex bg-slate-100 dark:bg-slate-950 p-1 rounded border border-slate-200 dark:border-slate-700">
-                    <button 
-                      type="button"
-                      onClick={() => setSaleType('In-Store')}
-                      className={`flex-1 text-xs py-1.5 rounded transition ${saleType === 'In-Store' ? 'bg-white dark:bg-slate-900 shadow text-slate-800 dark:text-slate-100 font-medium' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}
-                    >
-                      In-Store
-                    </button>
+                    {!isOnlineOnlyUser && (
+                      <button 
+                        type="button"
+                        onClick={() => setSaleType('In-Store')}
+                        className={`flex-1 text-xs py-1.5 rounded transition ${saleType === 'In-Store' ? 'bg-white dark:bg-slate-800 shadow text-slate-800 dark:text-slate-100 font-medium' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                      >
+                        In-Store
+                      </button>
+                    )}
                     <button 
                       type="button"
                       onClick={() => setSaleType('Online')}
-                      className={`flex-1 text-xs py-1.5 rounded transition ${saleType === 'Online' ? 'bg-sky-50 shadow text-sky-700 font-medium border border-sky-100' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                      className={`flex-1 text-xs py-1.5 rounded transition ${saleType === 'Online' ? 'bg-sky-50 dark:bg-sky-900/50 shadow text-sky-700 dark:text-sky-300 font-medium border border-sky-100 dark:border-sky-800' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}
                     >
                       Online Delivery
                     </button>
@@ -1715,7 +1727,7 @@ export function Sales() {
                       placeholder="Full Delivery Address" 
                       value={shippingAddress} 
                       onChange={e => setShippingAddress(e.target.value)} 
-                      className="w-full rounded-md border border-sky-200 px-3 py-2 bg-sky-50/30 focus:bg-white text-sm" 
+                      className="w-full rounded-md border border-sky-200 dark:border-sky-800 px-3 py-2 bg-sky-50/30 dark:bg-slate-800/80 dark:text-slate-100 focus:bg-white dark:focus:bg-slate-900 text-sm" 
                     />
                   </div>
                   <div>
@@ -1724,7 +1736,7 @@ export function Sales() {
                       type="number" 
                       value={shippingCost} 
                       onChange={e => setShippingCost(e.target.value === '' ? '' : Number(e.target.value))} 
-                      className="w-full rounded-md border border-sky-200 px-3 py-2 bg-sky-50/30 focus:bg-white text-sm" 
+                      className="w-full rounded-md border border-sky-200 dark:border-sky-800 px-3 py-2 bg-sky-50/30 dark:bg-slate-800/80 dark:text-slate-100 focus:bg-white dark:focus:bg-slate-900 text-sm" 
                     />
                   </div>
                                     <div>
@@ -1732,7 +1744,7 @@ export function Sales() {
                     <select 
                       value={onlineEmployeeId} 
                       onChange={e => setOnlineEmployeeId(e.target.value)} 
-                      className="w-full rounded-md border border-sky-300 px-3 py-2 bg-white dark:bg-slate-900 text-sm focus:border-sky-500 dark:focus:border-sky-400 focus:ring-1 focus:ring-sky-500 dark:focus:ring-sky-400 font-medium"
+                      className="w-full rounded-md border border-sky-300 dark:border-sky-700 px-3 py-2 bg-white dark:bg-slate-800 dark:text-slate-100 text-sm focus:border-sky-500 dark:focus:border-sky-400 focus:ring-1 focus:ring-sky-500 dark:focus:ring-sky-400 font-medium"
                       required={saleType === 'Online'}
                     >
                       <option value="">-- Select Employee --</option>
@@ -1743,7 +1755,7 @@ export function Sales() {
                   </div>
                   <div className="md:col-span-2">
                     <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                      <label className="block text-[10px] uppercase tracking-widest text-indigo-500 font-bold">Courier / COD Ledger Account *</label>
+                      <label className="block text-[10px] uppercase tracking-widest text-indigo-500 dark:text-indigo-400 font-bold">Courier / COD Ledger Account *</label>
                       <label className="inline-flex items-center gap-1.5 cursor-pointer select-none bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-400 dark:border-emerald-700 px-2.5 py-0.5 rounded-full text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition shadow-2xs">
                         <input
                           type="checkbox"
@@ -1767,7 +1779,7 @@ export function Sales() {
                         }
                       }} 
                       required={saleType === 'Online'}
-                      className="w-full rounded-md border border-indigo-300 px-3 py-2 bg-indigo-50 focus:bg-white text-sm shadow-sm font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      className="w-full rounded-md border border-indigo-300 dark:border-indigo-700 px-3 py-2 bg-indigo-50 dark:bg-slate-800 dark:text-slate-100 focus:bg-white dark:focus:bg-slate-900 text-sm shadow-sm font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                     >
                       <option value="">-- Select Courier from Ledger --</option>
                       {vendors.map(v => (
@@ -1782,7 +1794,7 @@ export function Sales() {
                       placeholder="Tracking ID" 
                       value={trackingNumber} 
                       onChange={e => setTrackingNumber(e.target.value)} 
-                      className="w-full rounded-md border border-sky-200 px-3 py-2 bg-sky-50/30 focus:bg-white text-sm" 
+                      className="w-full rounded-md border border-sky-200 dark:border-sky-800 px-3 py-2 bg-sky-50/30 dark:bg-slate-800/80 dark:text-slate-100 focus:bg-white dark:focus:bg-slate-900 text-sm" 
                     />
                   </div>
                 </div>
@@ -2941,20 +2953,27 @@ export function Sales() {
                     className="text-xs border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 bg-slate-50 dark:bg-slate-800/50" 
                   />
                 </div>
-                <select 
-                  value={filterType} 
-                  onChange={(e: any) => setFilterType(e.target.value)} 
-                  className="text-xs border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 bg-slate-50 dark:bg-slate-800/50"
-                >
-                  <option value="All">All Bills</option>
-                  <option value="In-Store">In-Store</option>
-                  <option value="Online">Online</option>
-                </select>
+                {!isOnlineOnlyUser ? (
+                  <select 
+                    value={filterType} 
+                    onChange={(e: any) => setFilterType(e.target.value)} 
+                    className="text-xs border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 bg-slate-50 dark:bg-slate-800/50"
+                  >
+                    <option value="All">All Bills</option>
+                    <option value="In-Store">In-Store</option>
+                    <option value="Online">Online</option>
+                  </select>
+                ) : (
+                  <span className="text-xs font-semibold px-3 py-1.5 rounded bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800">
+                    Online Bills Only
+                  </span>
+                )}
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {sales.filter(s => {
+              if (isOnlineOnlyUser && s.saleType !== 'Online') return false;
               const matchesType = filterType === 'All' || s.saleType === filterType;
               const d = format(new Date(s.date || 0), 'yyyy-MM-dd');
               const startStr = format(invoiceStartDate || new Date(), 'yyyy-MM-dd');

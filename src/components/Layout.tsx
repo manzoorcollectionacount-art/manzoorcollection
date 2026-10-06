@@ -3,7 +3,6 @@ import { useAuth } from '../context/AuthContext';
 import { useBranch } from '../context/BranchContext';
 import { useSettings } from '../context/SettingsContext';
 import { InstallPWA } from './InstallPWA';
-import { OfflineSyncBadge, OfflineBanner } from './OfflineSyncBadge';
 import { 
   BuildingIcon, 
   LayoutDashboard, 
@@ -37,7 +36,7 @@ import {
 import { ThemeToggle } from './ThemeToggle';
 import clsx from 'clsx';
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, getDocs, getDoc, runTransaction, writeBatch, warmUpOfflineCache } from '../lib/customFirestore';
+import { collection, query, where, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, getDocs, getDoc, runTransaction, writeBatch } from '../lib/customFirestore';
 import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { auth, db, safeCollectionSnapshot } from '../lib/firebase';
 import toast from 'react-hot-toast';
@@ -67,10 +66,6 @@ export function Layout() {
       window.removeEventListener('ais-auth-session-required', handleAuthIssue);
     };
   }, []);
-
-  useEffect(() => {
-    warmUpOfflineCache(activeBranchId || undefined);
-  }, [activeBranchId]);
 
   const handleUnlockProfitLoss = (e: React.FormEvent) => {
     e.preventDefault();
@@ -371,7 +366,6 @@ export function Layout() {
           </div>
           <div className="flex items-center gap-4 text-sm font-medium text-slate-700 dark:text-slate-200">
             
-            <OfflineSyncBadge />
             <ThemeToggle />
             <InstallPWA className="!py-1.5 !px-3 !text-xs !bg-emerald-600 hover:!bg-emerald-700 hidden sm:flex" />
 
@@ -410,7 +404,6 @@ export function Layout() {
         </header>
 
         {/* Content area */}
-        <OfflineBanner />
         <div className="flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-950 flex flex-col print:overflow-visible print:bg-white print:block print:h-auto print:min-h-0 relative">
           <div className={clsx("flex-1 print:p-0 print:block print:h-auto print:min-h-0", location.pathname === '/' ? "p-0" : "p-8 space-y-6")}>
             <Outlet />
