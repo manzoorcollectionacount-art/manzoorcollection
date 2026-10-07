@@ -393,14 +393,26 @@ export function Employees() {
     }
 
     const advBal = Number(emp.advanceBalance) || 0;
-    // Total advance ever issued & deducted for this employee
-    const empIssuedAdvances = advanceLedgerRecords
-      .filter(l => l.employeeId === emp.id)
+    // Monthly advance for the payroll month (only the advance recorded in that month's payroll slip, not grand total across all months)
+    const payrollMonthStr = lastPayrollMonth || currentMonthStr;
+    const monthIssuedAdvances = advanceLedgerRecords
+      .filter(l => {
+        if (l.employeeId !== emp.id) return false;
+        try {
+          const dStr = format(new Date(Number(l.date)), 'yyyy-MM');
+          return dStr === payrollMonthStr;
+        } catch {
+          return false;
+        }
+      })
       .reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
-    const empDeductedAdvances = empSlips
-      .reduce((sum, s) => sum + (Number(s.advances) || 0), 0);
-    // Total Advance (all-time taken, or current balance + deducted if higher)
-    const totalAdvanceTaken = Math.max(empIssuedAdvances, advBal + empDeductedAdvances, advBal);
+
+    // Advance recorded in the last payroll slip for that month (deducted advance or new advance given in payroll, or if no slip yet, this month's advance)
+    const slipMonthAdvance = lastSlip
+      ? (Number(lastSlip.advances || 0) + Number(lastSlip.recentAdvance || 0)) || Number(lastSlip.previousAdvance || 0) || monthIssuedAdvances
+      : (monthIssuedAdvances || advBal);
+
+    const slipMonthDeducted = lastSlip ? Number(lastSlip.advances || 0) : 0;
 
     // Net Payable = Gross Earned (from Last Payroll / after Chuti cut) - Current Advance Balance
     const netPayable = grossEarned - advBal;
@@ -416,6 +428,7 @@ export function Employees() {
       lastPayrollBase,
       lastPayrollMonth,
       lastPayrollDays,
+      payrollMonthStr,
       monthlyRate,
       dailyRate,
       daysInMonth,
@@ -428,8 +441,8 @@ export function Employees() {
       totalDayCutAmount,
       grossEarned,
       advBal,
-      totalAdvanceTaken,
-      empDeductedAdvances,
+      totalAdvanceTaken: slipMonthAdvance,
+      empDeductedAdvances: slipMonthDeducted,
       netPayable
     };
   };
@@ -508,10 +521,10 @@ export function Employees() {
           <div className="hidden md:flex flex-col items-end px-3 py-1.5 bg-rose-50/60 dark:bg-rose-950/30 rounded-md border border-rose-200 dark:border-rose-900/50">
              <span className="text-rose-500 uppercase tracking-widest text-[10px] font-bold">Advance (Dr)</span>
              <span className="font-bold text-rose-600 dark:text-rose-400 font-mono">PKR {totalAdvances.toLocaleString()}</span>
-             <span className="text-[10px] font-semibold text-orange-600 dark:text-orange-400 font-mono">Total Adv: PKR {totalAllAdvancesTaken.toLocaleString()}</span>
+             <span className="text-[10px] font-semibold text-orange-600 dark:text-orange-400 font-mono">Month Adv ({latestPayrollMonth || currentMonthStr}): PKR {totalAllAdvancesTaken.toLocaleString()}</span>
           </div>
           <div className="hidden md:flex flex-col items-end px-3 py-1.5 bg-orange-50/60 dark:bg-orange-950/30 rounded-md border border-orange-200 dark:border-orange-900/50">
-             <span className="text-orange-600 dark:text-orange-400 uppercase tracking-widest text-[10px] font-bold">Total Advance</span>
+             <span className="text-orange-600 dark:text-orange-400 uppercase tracking-widest text-[10px] font-bold">Payroll Adv ({latestPayrollMonth || currentMonthStr})</span>
              <span className="font-bold text-orange-700 dark:text-orange-300 font-mono">PKR {totalAllAdvancesTaken.toLocaleString()}</span>
           </div>
           <div className="hidden md:flex flex-col items-end px-3.5 py-1.5 bg-emerald-50/70 dark:bg-emerald-950/40 rounded-md border border-emerald-300 dark:border-emerald-800">
@@ -634,7 +647,7 @@ export function Employees() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Role & Post</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Salary Details</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-rose-600 dark:text-rose-400 uppercase tracking-wider">Advance (Dr)</th>
-                <th className="px-6 py-3 text-right text-xs font-bold text-orange-600 dark:text-orange-400 uppercase tracking-wider bg-orange-50/40 dark:bg-orange-950/20">Total Advance</th>
+                <th className="px-6 py-3 text-right text-xs font-bold text-orange-600 dark:text-orange-400 uppercase tracking-wider bg-orange-50/40 dark:bg-orange-950/20">Payroll Month Adv</th>
                 <th className="px-6 py-3 text-right text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider bg-emerald-50/40 dark:bg-emerald-950/20">Payroll Amount (Net Payable)</th>
                 <th className="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider print:hidden">Actions</th>
@@ -695,7 +708,7 @@ export function Employees() {
                           {advBal > 0 ? `Rs ${advBal.toLocaleString()}` : 'Rs 0'}
                         </span>
                         <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 mt-0.5">
-                          Total Adv: Rs {totalAdv.toLocaleString()}
+                          Payroll Adv ({pInfo.payrollMonthStr}): Rs {totalAdv.toLocaleString()}
                         </span>
                       </div>
                     </td>
@@ -704,11 +717,9 @@ export function Employees() {
                         <span className="text-sm font-extrabold text-orange-700 dark:text-orange-400 px-2.5 py-1 rounded border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950/40">
                           Rs {totalAdv.toLocaleString()}
                         </span>
-                        {pInfo.empDeductedAdvances > 0 && (
-                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5">
-                            Paid/Cut: Rs {pInfo.empDeductedAdvances.toLocaleString()}
-                          </span>
-                        )}
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          Month: {pInfo.payrollMonthStr}
+                        </span>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right bg-emerald-50/20 dark:bg-emerald-950/10">
