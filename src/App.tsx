@@ -20,6 +20,7 @@ import { Purchases } from './pages/Purchases';
 import { Customers } from './pages/Customers';
 import { Vendors } from './pages/Vendors';
 import { Employees } from './pages/Employees';
+import { Attendance } from './pages/Attendance';
 import { Payroll } from './pages/Payroll';
 import { Ledger } from './pages/Ledger';
 import { Reports } from './pages/Reports';
@@ -153,6 +154,7 @@ export default function App() {
                   <Route path="expenses" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'cashier']}><Expenses /></ProtectedRoute>} />
                   <Route path="owner-account" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'cashier', 'staff']}><OwnerAccount /></ProtectedRoute>} />
                   <Route path="employees" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'cashier']}><Employees /></ProtectedRoute>} />
+                  <Route path="attendance" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'cashier', 'staff']}><Attendance /></ProtectedRoute>} />
                   <Route path="employee-purchases" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'staff', 'billing_only', 'new_limited_access']}><EmployeePurchases /></ProtectedRoute>} />
                   <Route path="payroll" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access']}><Payroll /></ProtectedRoute>} />
                   <Route path="ledger" element={<ProtectedRoute allowedRoles={['super_admin', 'branch_admin', 'limited_access', 'new_limited_access']}><Ledger /></ProtectedRoute>} />

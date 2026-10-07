@@ -31,7 +31,8 @@ import {
   Eye,
   EyeOff,
   Landmark,
-  Boxes
+  Boxes,
+  CalendarCheck
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import clsx from 'clsx';
@@ -155,6 +156,7 @@ export function Layout() {
     { name: 'Owner Account', href: '/owner-account', icon: Landmark, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'cashier', 'staff'] },
     { name: 'Ledger', href: '/ledger', icon: BookText, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },
     { name: 'Labour', href: '/employees', icon: UsersRound, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'cashier'] },
+    { name: 'Daily Attendance', href: '/attendance', icon: CalendarCheck, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access', 'cashier', 'staff'] },
     { name: 'Employee Purchases', href: '/employee-purchases', icon: ShoppingCart, roles: ['super_admin', 'branch_admin', 'limited_access', 'staff', 'billing_only', 'new_limited_access'] },
     { name: 'Salesmen', href: '/salesmen', icon: UsersRound, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },
     { name: 'Payroll', href: '/payroll', icon: Banknote, roles: ['super_admin', 'branch_admin', 'limited_access', 'new_limited_access'] },

@@ -37,6 +37,7 @@ export function Payroll() {
   
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [payslips, setPayslips] = useState<Payslip[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [targetBranchId, setTargetBranchId] = useState('');
   
@@ -90,9 +91,19 @@ export function Payroll() {
       setPayslips(data);
     });
 
+    // Fetch Attendance for automatic working days calculation
+    let attQ: any = collection(db, 'attendance');
+    if (activeBranchId) {
+      attQ = query(collection(db, 'attendance'), where('branchId', '==', activeBranchId));
+    }
+    const unsubAtt = safeCollectionSnapshot(attQ, (snap) => {
+      setAttendanceRecords(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    });
+
     return () => {
       unsubEmp();
       unsubSlip();
+      unsubAtt();
     };
   }, [user, activeBranchId]);
 
@@ -101,19 +112,35 @@ export function Payroll() {
     setSelectedEmpId(empId);
     const emp = employees.find(e => e.id === empId);
     if (emp) {
+      // Check if attendance records exist for this employee & month
+      const empMonthAtt = attendanceRecords.filter(
+        r => r.employeeId === empId && (r.month === currentMonth || (r.date && r.date.startsWith(currentMonth)))
+      );
+      let attendedDaysStr = '';
+      if (empMonthAtt.length > 0) {
+        const present = empMonthAtt.filter(r => r.status === 'Present' || r.status === 'Late').length;
+        const halfDay = empMonthAtt.filter(r => r.status === 'Half Day').length;
+        attendedDaysStr = (present + halfDay * 0.5).toString();
+      }
+
       if (emp.monthlySalary) {
         let daysInMonth = 30;
         if (currentMonth) {
           const [yyyy, mm] = currentMonth.split('-');
           daysInMonth = new Date(Number(yyyy), Number(mm), 0).getDate() || 30;
         }
-        const dToKeep = days || batchWorkingDays || '26';
+        const dToKeep = attendedDaysStr || days || batchWorkingDays || '26';
         setDays(dToKeep);
         const dailyEq = emp.monthlySalary / daysInMonth;
         setBaseSalary(Math.round(dailyEq * Number(dToKeep)).toString());
       } else if (emp.dailyWage) {
-        setBaseSalary('');
-        setDays('');
+        if (attendedDaysStr) {
+          setDays(attendedDaysStr);
+          setBaseSalary(Math.round(emp.dailyWage * Number(attendedDaysStr)).toString());
+        } else {
+          setBaseSalary('');
+          setDays('');
+        }
       } else {
         setBaseSalary('');
         setDays('');
@@ -304,9 +331,17 @@ export function Payroll() {
      const slips = payslips.filter(s => s.month === m);
      return {
         count: slips.length,
-        total: slips.reduce((sum, s) => sum + s.netPayable, 0)
+        total: slips.reduce((sum, s) => sum + s.netPayable, 0),
+        liveNet: slips.reduce((sum, s) => {
+          const emp = employees.find(e => e.id === s.employeeId);
+          const currentAdv = Number(emp?.advanceBalance || 0);
+          return sum + Math.max(0, (Number(s.baseSalary) || 0) - currentAdv);
+        }, 0)
      };
   };
+
+  const latestPayrollMonth = uniqueMonths.length > 0 ? uniqueMonths[0] : null;
+  const latestMonthStats = latestPayrollMonth ? getFolderStats(latestPayrollMonth) : null;
 
   const handleStartNewMonth = (e) => {
     e.preventDefault();
@@ -323,11 +358,23 @@ export function Payroll() {
     <div className="space-y-6">
       {!activeFolderMonth ? (
         <>
-          <div className="flex justify-between items-center card p-4 print:hidden">
-            <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100 flex items-center">
-              <ReceiptCent className="w-6 h-6 mr-3 text-emerald-600" />
-              Payroll & Salaries (Folders)
-            </h2>
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center card p-4 gap-4 print:hidden">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-100 flex items-center">
+                <ReceiptCent className="w-6 h-6 mr-3 text-emerald-600" />
+                Payroll & Salaries (Folders)
+              </h2>
+              {latestPayrollMonth && latestMonthStats && (
+                <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
+                  <span className="text-slate-500 dark:text-slate-400">
+                    Last Generated Payroll (<strong className="text-sky-600 dark:text-sky-400 font-mono">{latestPayrollMonth}</strong>): <strong className="font-mono text-slate-800 dark:text-slate-100">PKR {latestMonthStats.total.toLocaleString()}</strong>
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-bold font-mono">
+                    Current Net Payable (After Advances): PKR {latestMonthStats.liveNet.toLocaleString()}
+                  </span>
+                </div>
+              )}
+            </div>
             <form onSubmit={handleStartNewMonth} className="flex items-center space-x-2">
               <input type="month" required value={newFolderMonth} onChange={e => setNewFolderMonth(e.target.value)} className="input-field max-w-[200px]" />
               <button type="submit" className="btn btn-primary flex items-center">
@@ -348,7 +395,12 @@ export function Payroll() {
                    <Folder className="w-16 h-16 text-sky-400 mb-4 group-hover:text-sky-500 transition-colors" fill="currentColor" opacity={0.2} />
                    <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100">{m}</h3>
                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">{stats.count} Slips Generated</p>
-                   <p className="text-sm font-semibold text-emerald-600 mt-1">Total: PKR {stats.total.toLocaleString()}</p>
+                   <p className="text-sm font-semibold text-emerald-600 mt-1">Slip Net: PKR {stats.total.toLocaleString()}</p>
+                   {stats.liveNet !== stats.total && (
+                     <p className="text-xs font-mono text-sky-600 dark:text-sky-400 mt-0.5">
+                       Remaining Net: PKR {stats.liveNet.toLocaleString()}
+                     </p>
+                   )}
                  </div>
                );
              })}
@@ -493,6 +545,7 @@ export function Payroll() {
                         emp={emp} 
                         month={activeFolderMonth as string} 
                         defaultWorkingDays={batchWorkingDays}
+                        attendanceRecords={attendanceRecords}
                         onDaysChangedByUser={(newDays) => setBatchWorkingDays(newDays)}
                         onAdd={(slip) => setPendingSlips([...pendingSlips, { id: Math.random().toString(), ...slip }])} 
                       />
@@ -869,6 +922,7 @@ interface EmployeePayrollRowProps {
   emp: any;
   month: string;
   defaultWorkingDays?: string;
+  attendanceRecords?: any[];
   onDaysChangedByUser?: (newDays: string) => void;
   onAdd: (slip: any) => void;
 }
@@ -877,34 +931,58 @@ const EmployeePayrollRow: React.FC<EmployeePayrollRowProps> = ({
   emp, 
   month, 
   defaultWorkingDays, 
+  attendanceRecords = [],
   onDaysChangedByUser, 
   onAdd 
 }) => {
   const [days, setDays] = React.useState(defaultWorkingDays || '26');
   const [isCustomized, setIsCustomized] = React.useState(false);
   const [baseSalary, setBaseSalary] = React.useState('');
-  const [deductions, setDeductions] = React.useState('');
+  const [deductions, setDeductions] = React.useState(emp.advanceBalance > 0 ? String(emp.advanceBalance) : '');
   const [newAdvance, setNewAdvance] = React.useState('');
   const [newAdvanceDate, setNewAdvanceDate] = React.useState(new Date().toISOString().substring(0, 10));
 
+  const empAtt = React.useMemo(() => {
+    const recs = (attendanceRecords || []).filter(
+      (r: any) => r.employeeId === emp.id && (r.month === month || (r.date && String(r.date).startsWith(month)))
+    );
+    const absent = recs.filter((r: any) => r.status === 'Absent').length;
+    const leave = recs.filter((r: any) => r.status === 'Leave').length;
+    const halfDay = recs.filter((r: any) => r.status === 'Half Day').length;
+    const present = recs.filter((r: any) => r.status === 'Present' || r.status === 'Late').length;
+    const chutiDays = absent + leave + halfDay * 0.5;
+    return { totalRecs: recs.length, absent, leave, halfDay, present, chutiDays };
+  }, [attendanceRecords, emp.id, month]);
+
   React.useEffect(() => {
     if (!isCustomized) {
-      const activeDays = defaultWorkingDays || '26';
+      let daysInMonth = 30;
+      if (month) {
+        const [yyyy, mm] = month.split('-');
+        daysInMonth = new Date(Number(yyyy), Number(mm), 0).getDate() || 30;
+      }
+
+      let activeDays = defaultWorkingDays || '26';
+      if (empAtt.totalRecs > 0) {
+        if (empAtt.chutiDays > 0 && emp.monthlySalary) {
+          // Deduct chutiyan from full month days (or default working days if lower)
+          const baseTotalDays = Number(defaultWorkingDays) || daysInMonth;
+          activeDays = Math.max(0, baseTotalDays - empAtt.chutiDays).toString();
+        } else if (empAtt.present + empAtt.halfDay > 0 && !emp.monthlySalary) {
+          activeDays = (empAtt.present + empAtt.halfDay * 0.5).toString();
+        }
+      }
+
       setDays(activeDays);
       const d = Number(activeDays) || 0;
       if (emp.monthlySalary) {
-        let daysInMonth = 30;
-        if (month) {
-          const [yyyy, mm] = month.split('-');
-          daysInMonth = new Date(Number(yyyy), Number(mm), 0).getDate() || 30;
-        }
         const dailyEq = emp.monthlySalary / daysInMonth;
         setBaseSalary(Math.round(dailyEq * d).toString());
       } else if (emp.dailyWage) {
-        setBaseSalary((emp.dailyWage * d).toString());
+        setBaseSalary(Math.round(emp.dailyWage * d).toString());
       }
     }
-  }, [defaultWorkingDays, isCustomized, emp, month]);
+  }, [defaultWorkingDays, isCustomized, emp, month, empAtt]);
 
   const handleDaysChange = (val: string) => {
     setDays(val);
@@ -936,6 +1014,11 @@ const EmployeePayrollRow: React.FC<EmployeePayrollRowProps> = ({
         <span className="block text-[10px] font-normal text-slate-500 uppercase tracking-wider">
           {emp.role} • {emp.monthlySalary ? `Monthly: ${emp.monthlySalary.toLocaleString()}` : `Daily: ${emp.dailyWage?.toLocaleString()}`}
         </span>
+        {empAtt.chutiDays > 0 && (
+          <span className="inline-block mt-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">
+            Chuti/Absent: {empAtt.chutiDays} days
+          </span>
+        )}
       </td>
       <td className="px-2 py-3 text-center">
         <input type="number" value={days} onChange={e => handleDaysChange(e.target.value)} className="w-12 text-center input-field py-1 px-1 text-sm bg-slate-50 dark:bg-slate-900 border-slate-200 shadow-inner" placeholder="0" />

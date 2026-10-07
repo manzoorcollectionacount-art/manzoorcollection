@@ -30,6 +30,9 @@ export function Employees() {
   const { activeBranchId, branches } = useBranch();
   const { enableDeletion } = useSettings();
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [payslips, setPayslips] = useState<any[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
+  const [advanceLedgerRecords, setAdvanceLedgerRecords] = useState<any[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -134,10 +137,40 @@ export function Employees() {
       ? collection(db, 'employees')
       : query(collection(db, 'employees'), where('branchId', '==', activeBranchId));
 
-    const unsub = safeCollectionSnapshot(q, (snap) => {
-      setEmployees(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as Employee)));
+    const unsubEmp = safeCollectionSnapshot(q, (snap) => {
+      setEmployees(snap.docs.map(d => ({ ...(d.data() as any), id: d.id } as Employee)));
     });
-    return unsub;
+
+    const slipQ = user?.role === 'super_admin' && !activeBranchId
+      ? collection(db, 'payroll')
+      : query(collection(db, 'payroll'), where('branchId', '==', activeBranchId));
+
+    const unsubSlip = safeCollectionSnapshot(slipQ, (snap) => {
+      const list = snap.docs
+        .map(d => ({ ...(d.data() as any), id: d.id }))
+        .sort((a: any, b: any) => (b.date || 0) - (a.date || 0));
+      setPayslips(list);
+    });
+
+    const attQ = user?.role === 'super_admin' && !activeBranchId
+      ? collection(db, 'attendance')
+      : query(collection(db, 'attendance'), where('branchId', '==', activeBranchId));
+
+    const unsubAtt = safeCollectionSnapshot(attQ, (snap) => {
+      setAttendanceRecords(snap.docs.map(d => ({ ...(d.data() as any), id: d.id })));
+    });
+
+    const advLedgerQ = query(collection(db, 'ledger'), where('reference', '==', 'Advance'));
+    const unsubAdvLedger = safeCollectionSnapshot(advLedgerQ, (snap) => {
+      setAdvanceLedgerRecords(snap.docs.map(d => ({ ...(d.data() as any), id: d.id })));
+    });
+
+    return () => {
+      unsubEmp();
+      unsubSlip();
+      unsubAtt();
+      unsubAdvLedger();
+    };
   }, [user, activeBranchId]);
 
   const resetForm = () => {
@@ -235,10 +268,12 @@ export function Employees() {
       const desc = `Advance to ${advanceEmp.name} ${advanceDesc ? '('+advanceDesc+')' : ''}`;
       
       // Update employee's advance balance
+      const newAdvanceBalance = (advanceEmp.advanceBalance || 0) + amount;
       await updateDoc(doc(db, 'employees', advanceEmp.id), {
-        advanceBalance: (advanceEmp.advanceBalance || 0) + amount,
+        advanceBalance: newAdvanceBalance,
         updatedAt: Timestamp.now()
       });
+      setAdvanceEmp({ ...advanceEmp, advanceBalance: newAdvanceBalance });
       // Add to Ledger as Cash OUT
       const ledgerDoc = await addDoc(collection(db, 'ledger'), {
         branchId: advanceEmp.branchId,
@@ -295,9 +330,130 @@ export function Employees() {
     printInvoice('employee-summary-print', `${advanceEmp.name} - Advance Summary`, 'a4');
   };
 
-  const totalGrossSalary = employees
-    .filter(emp => emp.status === 'active')
-    .reduce((sum, emp) => sum + (emp.monthlySalary || 0), 0);
+  const activeEmployees = employees.filter(emp => emp.status === 'active');
+
+  const currentMonthStr = format(new Date(), 'yyyy-MM');
+
+  // Helper to compute each employee's payroll breakdown (Last Payroll + Attendance/Leave Cut + Advance Deduction)
+  const getEmployeePayrollInfo = (emp: Employee) => {
+    const empSlips = payslips
+      .filter(s => s.employeeId === emp.id)
+      .sort((a, b) => (b.month || '').localeCompare(a.month || '') || (b.date || 0) - (a.date || 0));
+    const lastSlip = empSlips[0] || null;
+
+    const targetMonth = lastSlip?.month || currentMonthStr;
+    const [yyyy, mm] = (targetMonth || currentMonthStr).split('-');
+    const daysInMonth = (yyyy && mm) ? (new Date(Number(yyyy), Number(mm), 0).getDate() || 30) : 30;
+
+    // Attendance records for current month (or target month)
+    const currMonthAtt = attendanceRecords.filter(
+      r => r.employeeId === emp.id && (r.month === currentMonthStr || (r.date && String(r.date).startsWith(currentMonthStr)))
+    );
+
+    const absentCount = currMonthAtt.filter(r => r.status === 'Absent').length;
+    const leaveCount = currMonthAtt.filter(r => r.status === 'Leave').length;
+    const halfDayCount = currMonthAtt.filter(r => r.status === 'Half Day').length;
+    const presentCount = currMonthAtt.filter(r => r.status === 'Present' || r.status === 'Late').length;
+
+    // Total chutiyan (Absent + Unpaid Leave + 0.5 Half Day)
+    const chutiDays = absentCount + leaveCount + (halfDayCount * 0.5);
+
+    const monthlyRate = Number(emp.monthlySalary) || 0;
+    const dailyRate = monthlyRate > 0 ? (monthlyRate / daysInMonth) : (Number(emp.dailyWage) || 0);
+
+    // Chuti / absence deduction amount from current attendance
+    const chutiCutAmount = Math.round(chutiDays * dailyRate);
+
+    // Base earned salary:
+    // If a last payroll slip exists, use its generated salary (baseSalary, which already reflects working days of that payroll)
+    // and if there are new current-month chutiyan not yet in that slip, deduct them if slip isn't for currentMonth
+    let grossEarned = monthlyRate;
+    let workingDays = daysInMonth - chutiDays;
+    let lastPayrollNet = lastSlip ? Number(lastSlip.netPayable || 0) : null;
+    let lastPayrollBase = lastSlip ? Number(lastSlip.baseSalary || 0) : null;
+    let lastPayrollMonth = lastSlip?.month || null;
+    let lastPayrollDays = lastSlip?.days !== undefined ? Number(lastSlip.days) : null;
+
+    if (lastSlip) {
+      // Start from the last generated payroll base salary (or netPayable before live advances)
+      // Wait: if lastSlip was generated with `days` working days, `lastSlip.baseSalary` already has that month's days cut!
+      // And if there are current month attendance chutiyan (when lastSlip is from a previous month or current month), we also account for chutiCutAmount if not already reflected in lastSlip.days.
+      grossEarned = lastPayrollBase !== null ? lastPayrollBase : monthlyRate;
+      if (lastPayrollMonth !== currentMonthStr && chutiCutAmount > 0) {
+        grossEarned = Math.max(0, grossEarned - chutiCutAmount);
+      } else if (lastPayrollMonth === currentMonthStr && currMonthAtt.length > 0 && lastPayrollDays === daysInMonth && chutiCutAmount > 0) {
+        grossEarned = Math.max(0, monthlyRate - chutiCutAmount);
+      }
+    } else {
+      if (monthlyRate > 0) {
+        grossEarned = Math.max(0, Math.round(monthlyRate - chutiCutAmount));
+      } else if (emp.dailyWage > 0 && presentCount + halfDayCount > 0) {
+        grossEarned = Math.round((presentCount + halfDayCount * 0.5) * emp.dailyWage);
+      }
+    }
+
+    const advBal = Number(emp.advanceBalance) || 0;
+    // Total advance ever issued & deducted for this employee
+    const empIssuedAdvances = advanceLedgerRecords
+      .filter(l => l.employeeId === emp.id)
+      .reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+    const empDeductedAdvances = empSlips
+      .reduce((sum, s) => sum + (Number(s.advances) || 0), 0);
+    // Total Advance (all-time taken, or current balance + deducted if higher)
+    const totalAdvanceTaken = Math.max(empIssuedAdvances, advBal + empDeductedAdvances, advBal);
+
+    // Net Payable = Gross Earned (from Last Payroll / after Chuti cut) - Current Advance Balance
+    const netPayable = grossEarned - advBal;
+
+    const slipDayCut = lastSlip && monthlyRate > lastSlip.baseSalary ? Math.round(monthlyRate - lastSlip.baseSalary) : 0;
+    const totalDayCutAmount = (lastSlip && lastPayrollMonth === currentMonthStr && slipDayCut > 0)
+      ? slipDayCut
+      : (slipDayCut + chutiCutAmount);
+
+    return {
+      lastSlip,
+      lastPayrollNet,
+      lastPayrollBase,
+      lastPayrollMonth,
+      lastPayrollDays,
+      monthlyRate,
+      dailyRate,
+      daysInMonth,
+      workingDays,
+      chutiDays,
+      absentCount,
+      leaveCount,
+      halfDayCount,
+      chutiCutAmount,
+      totalDayCutAmount,
+      grossEarned,
+      advBal,
+      totalAdvanceTaken,
+      empDeductedAdvances,
+      netPayable
+    };
+  };
+
+  const latestPayrollMonth = payslips.length > 0 ? payslips[0].month : null;
+
+  const totalGrossSalary = activeEmployees
+    .reduce((sum, emp) => sum + getEmployeePayrollInfo(emp).grossEarned, 0);
+
+  const totalLastMonthPayrollNet = payslips
+    .filter(s => latestPayrollMonth && s.month === latestPayrollMonth)
+    .reduce((sum, s) => sum + (Number(s.netPayable) || 0), 0);
+
+  const totalAdvances = activeEmployees
+    .reduce((sum, emp) => sum + (Number(emp.advanceBalance) || 0), 0);
+
+  const totalAllAdvancesTaken = activeEmployees
+    .reduce((sum, emp) => sum + getEmployeePayrollInfo(emp).totalAdvanceTaken, 0);
+
+  const totalChutiCut = activeEmployees
+    .reduce((sum, emp) => sum + getEmployeePayrollInfo(emp).totalDayCutAmount, 0);
+
+  const totalNetPayroll = activeEmployees
+    .reduce((sum, emp) => sum + getEmployeePayrollInfo(emp).netPayable, 0);
 
   return (
     <div className="space-y-6">
@@ -307,15 +463,60 @@ export function Employees() {
             <UsersRound className="w-6 h-6 mr-3 text-blue-600" />
             Payroll & Staff (Labour)
           </h2>
-          <div className="md:hidden mt-2 text-sm font-medium text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/50 px-3 py-1.5 rounded-md border border-slate-100 dark:border-slate-800/50 flex items-center">
-             <span className="text-slate-400 uppercase tracking-widest text-[10px] mr-2">Total Gross Salary:</span>
-             <span className="font-bold text-slate-800 dark:text-slate-100 font-mono">PKR {totalGrossSalary.toLocaleString()}</span>
+          {latestPayrollMonth && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Last Generated Payroll Month: <span className="font-bold text-sky-600 dark:text-sky-400 font-mono">{latestPayrollMonth}</span> (Total Slip Net: <span className="font-bold font-mono">PKR {totalLastMonthPayrollNet.toLocaleString()}</span>)
+            </p>
+          )}
+          <div className="md:hidden mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 w-full">
+             <div className="text-xs bg-slate-50 dark:bg-slate-800/50 px-2.5 py-1.5 rounded-md border border-slate-100 dark:border-slate-800/50">
+               <span className="block text-slate-400 uppercase tracking-wider text-[9px] font-bold">Payroll Salary (After Days Cut)</span>
+               <span className="font-bold text-slate-800 dark:text-slate-100 font-mono">Rs {totalGrossSalary.toLocaleString()}</span>
+             </div>
+             <div className="text-xs bg-amber-50/60 dark:bg-amber-950/30 px-2.5 py-1.5 rounded-md border border-amber-200 dark:border-amber-900/50">
+               <span className="block text-amber-600 uppercase tracking-wider text-[9px] font-bold">Days / Chuti Cut</span>
+               <span className="font-bold text-amber-700 dark:text-amber-400 font-mono">Rs {totalChutiCut.toLocaleString()}</span>
+             </div>
+             <div className="text-xs bg-rose-50/60 dark:bg-rose-950/30 px-2.5 py-1.5 rounded-md border border-rose-100 dark:border-rose-900/50">
+               <span className="block text-rose-500 uppercase tracking-wider text-[9px] font-bold">Advance (Dr)</span>
+               <span className="font-bold text-rose-600 dark:text-rose-400 font-mono">Rs {totalAdvances.toLocaleString()}</span>
+               <span className="block text-[9px] text-orange-600 dark:text-orange-400 font-mono mt-0.5">Total Adv: Rs {totalAllAdvancesTaken.toLocaleString()}</span>
+             </div>
+             <div className="text-xs bg-emerald-50/60 dark:bg-emerald-950/30 px-2.5 py-1.5 rounded-md border border-emerald-200 dark:border-emerald-900/50">
+               <span className="block text-emerald-600 uppercase tracking-wider text-[9px] font-bold">Net Payable Payroll</span>
+               <span className="font-bold text-emerald-700 dark:text-emerald-300 font-mono">Rs {totalNetPayroll.toLocaleString()}</span>
+             </div>
           </div>
         </div>
-        <div className="flex items-center space-x-4 w-full md:w-auto mt-4 md:mt-0">
-          <div className="hidden md:flex flex-col items-end px-4 py-1.5 bg-slate-50 dark:bg-slate-800/50 rounded-md border border-slate-100 dark:border-slate-800/50">
-             <span className="text-slate-400 uppercase tracking-widest text-[10px] font-bold">Total Gross Salary</span>
+        <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto mt-4 md:mt-0">
+          {latestPayrollMonth && (
+            <div className="hidden md:flex flex-col items-end px-3 py-1.5 bg-sky-50/60 dark:bg-sky-950/30 rounded-md border border-sky-200 dark:border-sky-900/50">
+               <span className="text-sky-600 dark:text-sky-400 uppercase tracking-widest text-[10px] font-bold">Last Payroll ({latestPayrollMonth})</span>
+               <span className="font-bold text-sky-700 dark:text-sky-300 font-mono">PKR {totalLastMonthPayrollNet.toLocaleString()}</span>
+            </div>
+          )}
+          <div className="hidden md:flex flex-col items-end px-3 py-1.5 bg-slate-50 dark:bg-slate-800/50 rounded-md border border-slate-100 dark:border-slate-800/50">
+             <span className="text-slate-400 uppercase tracking-widest text-[10px] font-bold">Earned Salary (After Chuti)</span>
              <span className="font-bold text-slate-800 dark:text-slate-100 font-mono">PKR {totalGrossSalary.toLocaleString()}</span>
+          </div>
+          {totalChutiCut > 0 && (
+            <div className="hidden md:flex flex-col items-end px-3 py-1.5 bg-amber-50/60 dark:bg-amber-950/30 rounded-md border border-amber-200 dark:border-amber-900/50">
+               <span className="text-amber-600 dark:text-amber-400 uppercase tracking-widest text-[10px] font-bold">Chuti / Days Cut</span>
+               <span className="font-bold text-amber-700 dark:text-amber-400 font-mono">-PKR {totalChutiCut.toLocaleString()}</span>
+            </div>
+          )}
+          <div className="hidden md:flex flex-col items-end px-3 py-1.5 bg-rose-50/60 dark:bg-rose-950/30 rounded-md border border-rose-200 dark:border-rose-900/50">
+             <span className="text-rose-500 uppercase tracking-widest text-[10px] font-bold">Advance (Dr)</span>
+             <span className="font-bold text-rose-600 dark:text-rose-400 font-mono">PKR {totalAdvances.toLocaleString()}</span>
+             <span className="text-[10px] font-semibold text-orange-600 dark:text-orange-400 font-mono">Total Adv: PKR {totalAllAdvancesTaken.toLocaleString()}</span>
+          </div>
+          <div className="hidden md:flex flex-col items-end px-3 py-1.5 bg-orange-50/60 dark:bg-orange-950/30 rounded-md border border-orange-200 dark:border-orange-900/50">
+             <span className="text-orange-600 dark:text-orange-400 uppercase tracking-widest text-[10px] font-bold">Total Advance</span>
+             <span className="font-bold text-orange-700 dark:text-orange-300 font-mono">PKR {totalAllAdvancesTaken.toLocaleString()}</span>
+          </div>
+          <div className="hidden md:flex flex-col items-end px-3.5 py-1.5 bg-emerald-50/70 dark:bg-emerald-950/40 rounded-md border border-emerald-300 dark:border-emerald-800">
+             <span className="text-emerald-600 dark:text-emerald-400 uppercase tracking-widest text-[10px] font-bold">Overall Net Payable</span>
+             <span className="font-bold text-emerald-700 dark:text-emerald-300 font-mono">PKR {totalNetPayroll.toLocaleString()}</span>
           </div>
           <button
             onClick={() => printInvoice('employees-print-content', 'Staff & Labour List', 'a4')}
@@ -432,7 +633,9 @@ export function Employees() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Labour / Employee Name</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Role & Post</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Salary Details</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Advance (Dr)</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-rose-600 dark:text-rose-400 uppercase tracking-wider">Advance (Dr)</th>
+                <th className="px-6 py-3 text-right text-xs font-bold text-orange-600 dark:text-orange-400 uppercase tracking-wider bg-orange-50/40 dark:bg-orange-950/20">Total Advance</th>
+                <th className="px-6 py-3 text-right text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider bg-emerald-50/40 dark:bg-emerald-950/20">Payroll Amount (Net Payable)</th>
                 <th className="px-6 py-3 text-center text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider print:hidden">Actions</th>
               </tr>
@@ -440,12 +643,18 @@ export function Employees() {
             <tbody className="bg-white dark:bg-slate-900 divide-y divide-slate-200 dark:divide-slate-700">
               {employees.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-slate-500 dark:text-slate-400">
+                  <td colSpan={8} className="px-6 py-8 text-center text-slate-500 dark:text-slate-400">
                     No labour or employees found for this branch. Click "Add Labour" to create one.
                   </td>
                 </tr>
               ) : (
-                employees.map((emp) => (
+                employees.map((emp) => {
+                  const pInfo = getEmployeePayrollInfo(emp);
+                  const advBal = pInfo.advBal;
+                  const totalAdv = pInfo.totalAdvanceTaken;
+                  const netPayrollAmt = pInfo.netPayable;
+
+                  return (
                   <tr key={emp.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex flex-col">
@@ -470,12 +679,65 @@ export function Employees() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right">
                       <div className="flex flex-col items-end">
-                        {emp.monthlySalary > 0 && <span className="text-sm font-bold text-slate-900 dark:text-slate-50">Rs {emp.monthlySalary.toLocaleString()} /mo</span>}
-                        {emp.dailyWage > 0 && <span className="text-xs text-slate-500">Rs {emp.dailyWage.toLocaleString()} /day</span>}
+                        {emp.monthlySalary > 0 && <span className="text-sm font-bold text-slate-900 dark:text-slate-50 font-mono">Rs {emp.monthlySalary.toLocaleString()} /mo</span>}
+                        {emp.dailyWage > 0 && <span className="text-xs text-slate-500 font-mono">Rs {emp.dailyWage.toLocaleString()} /day</span>}
                         {!emp.monthlySalary && !emp.dailyWage && <span className="text-xs text-slate-400">-</span>}
+                        {pInfo.chutiDays > 0 && (
+                          <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 mt-0.5 font-mono">
+                            Chuti: {pInfo.chutiDays}d (-Rs {pInfo.chutiCutAmount.toLocaleString()})
+                          </span>
+                        )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-rose-600 text-right font-bold">{emp.advanceBalance ? `Rs ${emp.advanceBalance.toLocaleString()}` : '-'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right font-mono">
+                      <div className="flex flex-col items-end">
+                        <span className="text-sm text-rose-600 dark:text-rose-400 font-bold">
+                          {advBal > 0 ? `Rs ${advBal.toLocaleString()}` : 'Rs 0'}
+                        </span>
+                        <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 mt-0.5">
+                          Total Adv: Rs {totalAdv.toLocaleString()}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right bg-orange-50/20 dark:bg-orange-950/10 font-mono">
+                      <div className="flex flex-col items-end">
+                        <span className="text-sm font-extrabold text-orange-700 dark:text-orange-400 px-2.5 py-1 rounded border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950/40">
+                          Rs {totalAdv.toLocaleString()}
+                        </span>
+                        {pInfo.empDeductedAdvances > 0 && (
+                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5">
+                            Paid/Cut: Rs {pInfo.empDeductedAdvances.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right bg-emerald-50/20 dark:bg-emerald-950/10">
+                      <div className="flex flex-col items-end gap-0.5">
+                        <span className={`text-sm font-extrabold font-mono px-2.5 py-1 rounded border ${
+                          netPayrollAmt < 0
+                            ? 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                            : 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                        }`}>
+                          Rs {netPayrollAmt.toLocaleString()}
+                        </span>
+                        {pInfo.lastSlip ? (
+                          <span className="text-[10px] font-semibold text-sky-600 dark:text-sky-400 font-mono">
+                            Last Payroll ({pInfo.lastPayrollMonth}): Rs {Number(pInfo.lastSlip.baseSalary || 0).toLocaleString()} {pInfo.lastPayrollDays ? `(${pInfo.lastPayrollDays}d)` : ''}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            Earned: Rs {pInfo.grossEarned.toLocaleString()}
+                          </span>
+                        )}
+                        {(advBal > 0 || pInfo.totalDayCutAmount > 0) && (
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {pInfo.monthlyRate > 0 ? `Sal ${pInfo.monthlyRate.toLocaleString()}` : `Earned ${pInfo.grossEarned.toLocaleString()}`}
+                            {pInfo.totalDayCutAmount > 0 ? ` - Cut ${pInfo.totalDayCutAmount.toLocaleString()}` : ''}
+                            {advBal > 0 ? ` - Adv ${advBal.toLocaleString()}` : ''}
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-center">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                         emp.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-100'
@@ -491,8 +753,6 @@ export function Employees() {
                         <button 
                           onClick={() => {
                             setAdvanceEmp(emp);
-                            // We need history to print summary, so we trigger modal hiddenly or just fetch and print
-                            // For simplicity, let's open modal and they can click print there, or add a direct print summary button
                             setShowAdvanceModal(true);
                             setTimeout(() => handlePrintWorkerSummary(), 500);
                           }} 
@@ -508,9 +768,35 @@ export function Employees() {
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
+            {employees.length > 0 && (
+              <tfoot className="bg-slate-50 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700 font-bold text-sm">
+                <tr>
+                  <td colSpan={2} className="px-6 py-3.5 text-right uppercase tracking-wider text-xs text-slate-500 dark:text-slate-400">
+                    Total Active Payroll Summary:
+                  </td>
+                  <td className="px-6 py-3.5 text-right font-mono text-slate-800 dark:text-slate-100">
+                    Rs {totalGrossSalary.toLocaleString()}
+                  </td>
+                  <td className="px-6 py-3.5 text-right font-mono text-rose-600 dark:text-rose-400">
+                    <div>Rs {totalAdvances.toLocaleString()}</div>
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
+                      Total Adv: Rs {totalAllAdvancesTaken.toLocaleString()}
+                    </div>
+                  </td>
+                  <td className="px-6 py-3.5 text-right font-mono text-orange-700 dark:text-orange-400 bg-orange-50/40 dark:bg-orange-950/30">
+                    Rs {totalAllAdvancesTaken.toLocaleString()}
+                  </td>
+                  <td className="px-6 py-3.5 text-right font-mono text-emerald-700 dark:text-emerald-300 bg-emerald-50/40 dark:bg-emerald-950/30">
+                    Rs {totalNetPayroll.toLocaleString()}
+                  </td>
+                  <td colSpan={2}></td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       </div>
@@ -535,14 +821,45 @@ export function Employees() {
             
             <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-100">
               <form onSubmit={handleAddAdvance} className="p-6">
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">
-                    Current Advance Balance
-                  </label>
-                  <div className="text-lg font-mono font-bold text-rose-600">
-                    {advanceEmp.advanceBalance ? `Rs ${advanceEmp.advanceBalance.toLocaleString()}` : 'Rs 0'}
-                  </div>
-                </div>
+                {(() => {
+                  const modalPInfo = getEmployeePayrollInfo(advanceEmp);
+                  const newAdvInput = Number(advanceAmount) || 0;
+                  const newTotalAdv = modalPInfo.advBal + newAdvInput;
+                  const newRemPayroll = modalPInfo.grossEarned - newTotalAdv;
+                  return (
+                    <div className="grid grid-cols-3 gap-2 mb-4 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
+                      <div>
+                        <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-400">
+                          {modalPInfo.lastSlip ? `Last Payroll (${modalPInfo.lastPayrollMonth})` : 'Earned Salary'}
+                        </label>
+                        <div className="text-sm font-mono font-bold text-slate-800 dark:text-slate-100">
+                          Rs {modalPInfo.grossEarned.toLocaleString()}
+                        </div>
+                        {modalPInfo.totalDayCutAmount > 0 && (
+                          <div className="text-[9px] font-mono text-amber-600">
+                            Chuti Cut: -Rs {modalPInfo.totalDayCutAmount.toLocaleString()}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-[10px] uppercase tracking-wider font-bold text-rose-500">
+                          Total Advance
+                        </label>
+                        <div className="text-sm font-mono font-bold text-rose-600">
+                          Rs {newTotalAdv.toLocaleString()}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] uppercase tracking-wider font-bold text-emerald-600">
+                          Net Payable
+                        </label>
+                        <div className="text-sm font-mono font-bold text-emerald-600">
+                          Rs {newRemPayroll.toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div className="mb-4">
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">

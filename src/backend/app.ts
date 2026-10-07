@@ -31,7 +31,7 @@ const ALLOWED_COLLECTIONS = [
   'purchases', 'expenses', 'payroll', 'employees', 'ledger',
   'users', 'settings', 'chart_of_accounts', 'stock_transfers', 'onlineSalesEmployees',
   'counters', 'activity_logs', 'salesmen', 'employeePurchases', 'employeeReturns',
-  'ownerTransactions', 'expenseAccountHeads'
+  'ownerTransactions', 'expenseAccountHeads', 'attendance'
 ];
 
 const verifiedTables = new Set<string>();
