@@ -13,6 +13,18 @@ export function printInvoice(elementId: string, title = 'Invoice', type: 'therma
     oldStyle.parentNode.removeChild(oldStyle);
   }
 
+  // Mark target element and all its ancestor elements up to body so we can hide all non-ancestors cleanly
+  const markedAncestors: HTMLElement[] = [];
+  if (targetEl) {
+    targetEl.setAttribute('data-print-target', 'true');
+    let curr: HTMLElement | null = targetEl.parentElement;
+    while (curr && curr !== document.body && curr !== document.documentElement) {
+      curr.setAttribute('data-print-ancestor', 'true');
+      markedAncestors.push(curr);
+      curr = curr.parentElement;
+    }
+  }
+
   // Mark body with active printing class
   document.body.classList.add('is-printing-target');
 
@@ -40,15 +52,28 @@ export function printInvoice(elementId: string, title = 'Invoice', type: 'therma
           overflow: visible !important;
           position: static !important;
         }
-        #root, main, .layout {
-          display: block !important;
-          height: auto !important;
-          min-height: 0 !important;
-          overflow: visible !important;
-          position: static !important;
+        /* Hide any element that is not an ancestor, not the target itself, and not inside the target */
+        body.is-printing-target *:not([data-print-ancestor="true"]):not([data-print-target="true"]):not([data-print-target="true"] *) {
+          display: none !important;
+          height: 0 !important;
           margin: 0 !important;
           padding: 0 !important;
+          overflow: hidden !important;
+        }
+        [data-print-ancestor="true"] {
+          display: block !important;
+          position: static !important;
+          width: 80mm !important;
+          max-width: 80mm !important;
+          height: auto !important;
+          min-height: 0 !important;
+          max-height: none !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          border: none !important;
+          box-shadow: none !important;
           background: transparent !important;
+          overflow: visible !important;
         }
         /* Hide all UI elements, navigation, buttons */
         header, aside, nav, footer, button, input, select,
@@ -102,16 +127,27 @@ export function printInvoice(elementId: string, title = 'Invoice', type: 'therma
           position: static !important;
           font-size: 12px !important;
         }
-        #root, main, .layout, div[class*="overflow"], div[class*="flex-1"] {
+        /* Hide any element that is not an ancestor, not the target itself, and not inside the target */
+        body.is-printing-target *:not([data-print-ancestor="true"]):not([data-print-target="true"]):not([data-print-target="true"] *) {
+          display: none !important;
+          height: 0 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          overflow: hidden !important;
+        }
+        [data-print-ancestor="true"] {
           display: block !important;
+          position: static !important;
+          width: 100% !important;
           height: auto !important;
           min-height: 0 !important;
           max-height: none !important;
-          overflow: visible !important;
-          position: static !important;
           margin: 0 !important;
           padding: 0 !important;
+          border: none !important;
+          box-shadow: none !important;
           background: transparent !important;
+          overflow: visible !important;
         }
         /* Strictly hide UI controls, nav, header, sidebar, buttons */
         header, aside, nav, footer, button, input, select,
@@ -168,6 +204,10 @@ export function printInvoice(elementId: string, title = 'Invoice', type: 'therma
   const cleanup = () => {
     document.title = originalTitle;
     document.body.classList.remove('is-printing-target');
+    if (targetEl) {
+      targetEl.removeAttribute('data-print-target');
+    }
+    markedAncestors.forEach(el => el.removeAttribute('data-print-ancestor'));
     if (styleEl && styleEl.parentNode) {
       styleEl.parentNode.removeChild(styleEl);
     }
