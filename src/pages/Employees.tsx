@@ -94,6 +94,8 @@ export function Employees() {
                date: data.date,
                type: isReturn ? 'return' : 'issue',
                amount: Number(data.amount) || 0,
+               previousAdvance: data.previousAdvance,
+               totalAdvance: data.totalAdvance,
                desc: data.description,
                refId: docSnap.id
              });
@@ -302,8 +304,14 @@ export function Employees() {
       const dateVal = new Date(advanceDate).getTime();
       const desc = `Advance to ${advanceEmp.name} ${advanceDesc ? '('+advanceDesc+')' : ''}`;
       
+      const pInfoBefore = getEmployeePayrollInfo(advanceEmp);
+      const previousAdvance = pInfoBefore.totalAdvanceTaken;
+      const totalAdvance = previousAdvance + amount;
+      const payrollSalary = pInfoBefore.grossEarned;
+      const remainingNetPay = payrollSalary - totalAdvance;
+
       // Update employee's advance balance
-      const newAdvanceBalance = (advanceEmp.advanceBalance || 0) + amount;
+      const newAdvanceBalance = (Number(advanceEmp.advanceBalance) || 0) + amount;
       await updateDoc(doc(db, 'employees', advanceEmp.id), {
         advanceBalance: newAdvanceBalance,
         updatedAt: Timestamp.now()
@@ -318,6 +326,8 @@ export function Employees() {
         category: 'Payment',
         type: 'OUT',
         amount: amount,
+        previousAdvance: previousAdvance,
+        totalAdvance: totalAdvance,
         reference: 'Advance',
         createdAt: Timestamp.now(),
         tenantId: user?.tenantId || user?.uid
@@ -328,21 +338,39 @@ export function Employees() {
         id: ledgerDoc.id,
         date: dateVal,
         amount: amount,
+        previousAdvance: previousAdvance,
+        totalAdvance: totalAdvance,
+        payrollSalary: payrollSalary,
+        remainingNetPay: remainingNetPay,
         desc: desc,
-        employeeName: advanceEmp.name
+        note: advanceDesc || 'Cash Advance',
+        employeeName: advanceEmp.name,
+        employeeRole: advanceEmp.post || advanceEmp.role,
+        employeePhone: advanceEmp.phone || '-'
       };
       
       setCurrentPrintRecord(newRecord);
-      
-      // We don't automatically close if user wants to print, but the prompt implies they might want to print every time.
-      // I'll keep the modal open and clear inputs, or maybe just close and let them print from history?
-      // Actually, let's keep it open but show a "Print Last Receipt" button or just print immediately if confirmed.
+      setAdvanceHistory(prev => [
+        {
+          id: ledgerDoc.id,
+          date: dateVal,
+          type: 'issue',
+          amount: amount,
+          previousAdvance: previousAdvance,
+          totalAdvance: totalAdvance,
+          desc: desc,
+          refId: ledgerDoc.id
+        },
+        ...prev
+      ]);
       
       setAdvanceAmount('');
       setAdvanceDesc('');
       setAdvanceDate(format(new Date(), 'yyyy-MM-dd'));
-      
-      alert("Advance added successfully!");
+
+      setTimeout(() => {
+        printInvoice('advance-receipt-print', `Advance Slip - ${advanceEmp.name}`, 'thermal');
+      }, 150);
     } catch (err: any) {
       alert("Error adding advance: " + err.message);
     } finally {
@@ -350,14 +378,88 @@ export function Employees() {
     }
   };
 
-  const handlePrintAdvanceReceipt = (record: any) => {
+  const handlePrintAdvanceReceipt = (record: any, empOverride?: Employee) => {
+    const targetEmp = empOverride || advanceEmp;
+    const pInfo = targetEmp ? getEmployeePayrollInfo(targetEmp) : null;
+
+    let prevAdv = record.previousAdvance;
+    let totAdv = record.totalAdvance;
+    const currAdv = Number(record.amount) || 0;
+
+    if (prevAdv === undefined || totAdv === undefined) {
+      // Compute historical running balance up to this record if available in advanceHistory
+      if (advanceHistory.length > 0 && advanceHistory.some(h => h.id === record.id)) {
+        const sorted = [...advanceHistory].sort((a, b) => a.date - b.date);
+        let running = 0;
+        for (const item of sorted) {
+          if (item.id === record.id) {
+            prevAdv = Math.max(0, running);
+            totAdv = prevAdv + currAdv;
+            break;
+          }
+          if (item.type === 'issue') running += (Number(item.amount) || 0);
+          else running -= (Number(item.amount) || 0);
+        }
+      }
+      if (prevAdv === undefined || totAdv === undefined) {
+        const currentTotalAdv = pInfo ? pInfo.totalAdvanceTaken : (Number(targetEmp?.advanceBalance) || 0);
+        totAdv = currentTotalAdv;
+        prevAdv = Math.max(0, currentTotalAdv - currAdv);
+      }
+    }
+
+    const payrollSalary = record.payrollSalary !== undefined ? record.payrollSalary : (pInfo ? pInfo.grossEarned : (Number(targetEmp?.monthlySalary) || 0));
+    const remainingNetPay = payrollSalary - totAdv;
+
     setCurrentPrintRecord({
       ...record,
-      employeeName: advanceEmp?.name || record.employeeName
+      amount: currAdv,
+      previousAdvance: prevAdv,
+      totalAdvance: totAdv,
+      payrollSalary,
+      remainingNetPay,
+      employeeName: targetEmp?.name || record.employeeName,
+      employeeRole: targetEmp?.post || targetEmp?.role || record.employeeRole || 'Labour',
+      employeePhone: targetEmp?.phone || record.employeePhone || '-'
     });
     setTimeout(() => {
-      printInvoice('advance-receipt-print', 'Advance Receipt', 'thermal');
-    }, 100);
+      printInvoice('advance-receipt-print', `Advance Slip - ${targetEmp?.name || record.employeeName || 'Labour'}`, 'thermal');
+    }, 120);
+  };
+
+  const handlePrintEmployeeThermalSlip = (emp: Employee) => {
+    const pInfo = getEmployeePayrollInfo(emp);
+    const empAdvances = advanceLedgerRecords
+      .filter(l => l.employeeId === emp.id && l.type !== 'IN' && !String(l.description || '').toLowerCase().includes('return'))
+      .sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
+
+    const latestRec = empAdvances[0];
+    const currentTotalAdv = pInfo.totalAdvanceTaken;
+    const latestAmt = latestRec ? (Number(latestRec.amount) || 0) : 0;
+    const prevAdv = latestRec
+      ? (latestRec.previousAdvance !== undefined ? Number(latestRec.previousAdvance) : Math.max(0, currentTotalAdv - latestAmt))
+      : currentTotalAdv;
+    const totAdv = latestRec
+      ? (latestRec.totalAdvance !== undefined ? Number(latestRec.totalAdvance) : currentTotalAdv)
+      : currentTotalAdv;
+
+    setAdvanceEmp(emp);
+    setCurrentPrintRecord({
+      id: latestRec?.id || `ADV-${emp.id.slice(-4)}`,
+      date: latestRec?.date || Date.now(),
+      amount: latestAmt,
+      previousAdvance: prevAdv,
+      totalAdvance: totAdv,
+      payrollSalary: pInfo.grossEarned,
+      remainingNetPay: pInfo.netPayable,
+      desc: latestRec?.description || 'Advance Summary Slip',
+      employeeName: emp.name,
+      employeeRole: emp.post || emp.role,
+      employeePhone: emp.phone || '-'
+    });
+    setTimeout(() => {
+      printInvoice('advance-receipt-print', `Advance Slip - ${emp.name}`, 'thermal');
+    }, 120);
   };
 
   const handlePrintWorkerSummary = () => {
@@ -919,6 +1021,14 @@ export function Employees() {
                         <button onClick={() => { setAdvanceEmp(emp); setShowAdvanceModal(true); }} className="text-emerald-700 bg-emerald-100 dark:bg-emerald-900/50 hover:bg-emerald-200 px-2 py-1 rounded text-xs font-semibold transition-colors">
                           Add Advance
                         </button>
+                        <button
+                          onClick={() => handlePrintEmployeeThermalSlip(emp)}
+                          className="text-amber-800 bg-amber-100 dark:bg-amber-900/50 hover:bg-amber-200 px-2 py-1 rounded text-xs font-semibold transition-colors flex items-center"
+                          title="Print Thermal Advance Slip (Current + Previous + Total Advance)"
+                        >
+                          <Receipt className="w-3 h-3 mr-1" />
+                          Adv Slip
+                        </button>
                         <button 
                           onClick={() => {
                             setAdvanceEmp(emp);
@@ -998,38 +1108,52 @@ export function Employees() {
               <form onSubmit={handleAddAdvance} className="p-6">
                 {(() => {
                   const modalPInfo = getEmployeePayrollInfo(advanceEmp);
+                  const prevAdv = modalPInfo.totalAdvanceTaken;
                   const newAdvInput = Number(advanceAmount) || 0;
-                  const newTotalAdv = modalPInfo.totalAdvanceTaken + newAdvInput;
+                  const newTotalAdv = prevAdv + newAdvInput;
                   const newRemPayroll = modalPInfo.grossEarned - newTotalAdv;
                   return (
-                    <div className="grid grid-cols-3 gap-2 mb-4 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-400">
-                          {modalPInfo.lastSlip ? `Last Payroll (${modalPInfo.lastPayrollMonth})` : 'Earned Salary'}
-                        </label>
-                        <div className="text-sm font-mono font-bold text-slate-800 dark:text-slate-100">
-                          Rs {modalPInfo.grossEarned.toLocaleString()}
-                        </div>
-                        {modalPInfo.totalDayCutAmount > 0 && (
-                          <div className="text-[9px] font-mono text-amber-600">
-                            Chuti Cut: -Rs {modalPInfo.totalDayCutAmount.toLocaleString()}
+                    <div className="space-y-2 mb-4 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-lg border border-slate-200 dark:border-slate-700">
+                      <div className="grid grid-cols-3 gap-2 pb-2 border-b border-slate-200 dark:border-slate-700">
+                        <div>
+                          <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-500">
+                            Previous Advance
+                          </label>
+                          <div className="text-sm font-mono font-bold text-slate-800 dark:text-slate-100">
+                            Rs {prevAdv.toLocaleString()}
                           </div>
-                        )}
-                      </div>
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wider font-bold text-rose-500">
-                          Total Advance
-                        </label>
-                        <div className="text-sm font-mono font-bold text-rose-600">
-                          Rs {newTotalAdv.toLocaleString()}
+                        </div>
+                        <div>
+                          <label className="block text-[10px] uppercase tracking-wider font-bold text-amber-600">
+                            + Current Advance
+                          </label>
+                          <div className="text-sm font-mono font-bold text-amber-600">
+                            Rs {newAdvInput.toLocaleString()}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] uppercase tracking-wider font-bold text-rose-600">
+                            = Total Advance
+                          </label>
+                          <div className="text-sm font-mono font-extrabold text-rose-600">
+                            Rs {newTotalAdv.toLocaleString()}
+                          </div>
                         </div>
                       </div>
-                      <div>
-                        <label className={`block text-[10px] uppercase tracking-wider font-bold ${newRemPayroll < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                          Net Payable
-                        </label>
-                        <div className={`text-sm font-mono font-bold ${newRemPayroll < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                          Rs {newRemPayroll.toLocaleString()}
+                      <div className="flex justify-between items-center pt-1 text-xs">
+                        <div>
+                          <span className="text-slate-500 font-semibold">
+                            {modalPInfo.lastSlip ? `Payroll (${modalPInfo.lastPayrollMonth}): ` : 'Payroll Salary: '}
+                          </span>
+                          <span className="font-mono font-bold text-slate-800 dark:text-slate-100">
+                            Rs {modalPInfo.grossEarned.toLocaleString()}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 font-semibold">Net Balance: </span>
+                          <span className={`font-mono font-extrabold ${newRemPayroll < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                            Rs {newRemPayroll.toLocaleString()}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -1083,17 +1207,18 @@ export function Employees() {
                     disabled={isSubmitting}
                     className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all font-bold shadow-lg disabled:opacity-50 flex items-center justify-center"
                   >
-                    {isSubmitting ? 'Saving...' : 'ISSUE ADVANCE NOW'}
+                    <Receipt className="w-5 h-5 mr-2" />
+                    {isSubmitting ? 'Saving...' : 'ISSUE ADVANCE & PRINT THERMAL SLIP'}
                   </button>
                   
                   {currentPrintRecord && (
                     <button
                       type="button"
                       onClick={() => handlePrintAdvanceReceipt(currentPrintRecord)}
-                      className="w-full px-4 py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all font-bold shadow-lg flex items-center justify-center animate-bounce"
+                      className="w-full px-4 py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all font-bold shadow-lg flex items-center justify-center"
                     >
-                      <Receipt className="w-5 h-5 mr-2" />
-                      PRINT THERMAL RECEIPT
+                      <Printer className="w-5 h-5 mr-2" />
+                      RE-PRINT THERMAL ADVANCE SLIP
                     </button>
                   )}
                 </div>
@@ -1132,16 +1257,22 @@ export function Employees() {
                             {new Date(record.date).toLocaleDateString()}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-600 dark:text-slate-300 pr-8">
+                        <p className="text-xs text-slate-600 dark:text-slate-300 pr-20">
                           {record.desc}
                         </p>
+                        {record.previousAdvance !== undefined && record.totalAdvance !== undefined && (
+                          <div className="text-[10px] font-mono text-slate-500 mt-1">
+                            Prev: Rs {Number(record.previousAdvance).toLocaleString()} + Curr: Rs {Number(record.amount).toLocaleString()} = Total: Rs {Number(record.totalAdvance).toLocaleString()}
+                          </div>
+                        )}
                         {record.type === 'issue' && (
                           <button 
                             onClick={() => handlePrintAdvanceReceipt(record)}
-                            className="absolute right-2 bottom-2 opacity-0 group-hover:opacity-100 p-1 bg-slate-100 dark:bg-slate-800 rounded hover:bg-slate-200 transition-opacity"
-                            title="Print Receipt"
+                            className="absolute right-2 bottom-2 px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded text-[10px] font-bold flex items-center gap-1 transition-colors"
+                            title="Print Thermal Slip"
                           >
-                            <Printer className="w-3.5 h-3.5 text-slate-600" />
+                            <Printer className="w-3 h-3" />
+                            Slip
                           </button>
                         )}
                       </div>
@@ -1154,59 +1285,109 @@ export function Employees() {
         </div>
       )}
 
-      {/* Advance Receipt Thermal Print */}
+      {/* Advance Receipt Thermal Print (80mm Thermal Slip) */}
       <div id="advance-receipt-print" className="hidden">
-        {currentPrintRecord && (
-          <div className="p-4 text-black bg-white" style={{ fontFamily: 'monospace' }}>
-            <div className="text-center mb-4">
-              <h1 className="text-lg font-bold uppercase">{activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 'Business')}</h1>
-              <p className="text-sm">Advance Payment Receipt</p>
-              <div className="border-b border-black border-dashed my-2"></div>
+        {currentPrintRecord && (() => {
+          const currAdvAmt = Number(currentPrintRecord.amount) || 0;
+          const prevAdvAmt = currentPrintRecord.previousAdvance !== undefined
+            ? Number(currentPrintRecord.previousAdvance)
+            : Math.max(0, (advanceEmp ? getEmployeePayrollInfo(advanceEmp).totalAdvanceTaken : currAdvAmt) - currAdvAmt);
+          const totalAdvAmt = currentPrintRecord.totalAdvance !== undefined
+            ? Number(currentPrintRecord.totalAdvance)
+            : (prevAdvAmt + currAdvAmt);
+          const salaryAmt = currentPrintRecord.payrollSalary !== undefined
+            ? Number(currentPrintRecord.payrollSalary)
+            : (advanceEmp ? getEmployeePayrollInfo(advanceEmp).grossEarned : 0);
+          const netBalAmt = salaryAmt - totalAdvAmt;
+
+          return (
+            <div className="p-2 text-black bg-white" style={{ fontFamily: 'monospace', width: '76mm', margin: '0 auto' }}>
+              <div className="text-center mb-2">
+                <h1 className="text-base font-extrabold uppercase tracking-wide">
+                  {activeBranchId === 'main' ? 'Main Branch' : (branches.find(b => b.id === activeBranchId)?.name || 'Business')}
+                </h1>
+                <p className="text-xs font-bold uppercase border border-black inline-block px-2 py-0.5 mt-1">
+                  LABOUR ADVANCE SLIP
+                </p>
+                <div className="border-b-2 border-black border-dashed my-2"></div>
+              </div>
+
+              <div className="space-y-1 text-xs">
+                <div className="flex justify-between">
+                  <span className="font-bold">Date:</span>
+                  <span>{safeFormat(currentPrintRecord.date, 'dd-MMM-yyyy hh:mm a')}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-bold">Slip #:</span>
+                  <span>{String(currentPrintRecord.id || '').slice(-6).toUpperCase()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-bold">Labour Name:</span>
+                  <span className="font-extrabold uppercase">{currentPrintRecord.employeeName || advanceEmp?.name}</span>
+                </div>
+                {(currentPrintRecord.employeeRole || advanceEmp?.post || advanceEmp?.role) && (
+                  <div className="flex justify-between">
+                    <span className="font-bold">Role / Post:</span>
+                    <span>{currentPrintRecord.employeeRole || advanceEmp?.post || advanceEmp?.role}</span>
+                  </div>
+                )}
+
+                <div className="border-b-2 border-black border-dashed my-2"></div>
+
+                {/* Clear Advance Breakdown: Previous + Current = Total Advance */}
+                <div className="space-y-1.5 py-1">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="font-bold">Previous Advance (سابقہ ایڈوانس):</span>
+                    <span className="font-bold">Rs {prevAdvAmt.toLocaleString()}</span>
+                  </div>
+
+                  <div className="flex justify-between items-center py-1.5 px-1.5 border border-black bg-gray-100">
+                    <span className="font-extrabold text-xs">Current Advance (موجودہ ایڈوانس):</span>
+                    <span className="text-sm font-extrabold">+ Rs {currAdvAmt.toLocaleString()}</span>
+                  </div>
+
+                  <div className="border-t-2 border-b-2 border-black py-1.5 flex justify-between items-center">
+                    <span className="font-extrabold text-xs uppercase">Total Advance (کل ایڈوانس):</span>
+                    <span className="text-base font-extrabold">Rs {totalAdvAmt.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                {salaryAmt > 0 && (
+                  <div className="pt-1 space-y-1 border-b border-black border-dashed pb-2">
+                    <div className="flex justify-between text-[11px]">
+                      <span>Payroll Salary:</span>
+                      <span className="font-bold">Rs {salaryAmt.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-[11px] font-bold">
+                      <span>{netBalAmt < 0 ? 'Emp Ki Taraf Adv Due:' : 'Remaining Net Salary:'}</span>
+                      <span>Rs {netBalAmt.toLocaleString()}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-1.5 pt-1">
+                  <span className="font-bold">Note / Description:</span>
+                  <div className="text-[11px] break-words">{currentPrintRecord.desc || 'Advance Payment'}</div>
+                </div>
+              </div>
+
+              <div className="mt-8 flex justify-between px-1 pt-4 border-t border-black border-dashed">
+                <div className="text-center">
+                  <div className="w-24 border-b border-black mb-1"></div>
+                  <p className="text-[10px] font-bold">Issued By</p>
+                </div>
+                <div className="text-center">
+                  <div className="w-24 border-b border-black mb-1"></div>
+                  <p className="text-[10px] font-bold">Labour Sign</p>
+                </div>
+              </div>
+
+              <div className="mt-4 text-center text-[9px] border-t border-black border-dotted pt-1">
+                <p>Printed: {format(new Date(), 'dd-MMM-yyyy hh:mm a')}</p>
+              </div>
             </div>
-            
-            <div className="space-y-1 text-sm">
-              <div className="flex justify-between">
-                <span>Date:</span>
-                <span>{safeFormat(currentPrintRecord.date, 'dd-MMM-yyyy')}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Voucher #:</span>
-                <span>{currentPrintRecord.id.slice(-6).toUpperCase()}</span>
-              </div>
-              <div className="border-b border-black border-dashed my-2"></div>
-              
-              <div className="mb-2">
-                <span className="font-bold">Employee:</span>
-                <div className="pl-2">{currentPrintRecord.employeeName || advanceEmp?.name}</div>
-              </div>
-              
-              <div className="flex justify-between items-center py-2 bg-gray-50">
-                <span className="font-bold">Amount:</span>
-                <span className="text-lg font-bold">Rs {currentPrintRecord.amount.toLocaleString()}</span>
-              </div>
-              
-              <div className="mt-2">
-                <span className="font-bold">Note:</span>
-                <div className="pl-2 text-xs italic">{currentPrintRecord.desc || 'Advance Payment'}</div>
-              </div>
-            </div>
-            
-            <div className="mt-12 flex justify-between px-2 pt-4 border-t border-black border-dashed">
-              <div className="text-center">
-                <div className="w-24 border-b border-black mb-1"></div>
-                <p className="text-[10px]">Issued By</p>
-              </div>
-              <div className="text-center">
-                <div className="w-24 border-b border-black mb-1"></div>
-                <p className="text-[10px]">Labour Signature</p>
-              </div>
-            </div>
-            
-            <div className="mt-8 text-center text-[10px]">
-              <p>{new Date().toLocaleString()}</p>
-            </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* Employee Advance Summary A4 Print */}
