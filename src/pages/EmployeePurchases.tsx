@@ -158,9 +158,21 @@ export function EmployeePurchases() {
       const emp = employees.find(e => e.id === purchase.employeeId);
       if (emp) {
         batch.update(doc(db, 'employees', emp.id), {
-          advanceBalance: Math.max(0, (emp.advanceBalance || 0) - purchase.total),
+          advanceBalance: (Number(emp.advanceBalance) || 0) - purchase.total,
           updatedAt: Timestamp.now()
         });
+      }
+      try {
+        const ledgerQ = query(collection(db, 'ledger'), where('branchId', '==', activeBranchId));
+        const ledgerDocs = await safeGetDocs(ledgerQ);
+        ledgerDocs.docs.forEach(d => {
+          const desc = d.data().description || '';
+          if (desc.includes(purchase.invoiceNo)) {
+            batch.delete(doc(db, 'ledger', d.id));
+          }
+        });
+      } catch (lErr) {
+        console.warn("Could not delete ledger entry", lErr);
       }
       batch.delete(doc(db, 'employeePurchases', purchase.id));
       await batch.commit();
@@ -188,9 +200,21 @@ export function EmployeePurchases() {
       const emp = employees.find(e => e.id === ret.employeeId);
       if (emp) {
         batch.update(doc(db, 'employees', emp.id), {
-          advanceBalance: (emp.advanceBalance || 0) + ret.total,
+          advanceBalance: (Number(emp.advanceBalance) || 0) + ret.total,
           updatedAt: Timestamp.now()
         });
+      }
+      try {
+        const ledgerQ = query(collection(db, 'ledger'), where('branchId', '==', activeBranchId));
+        const ledgerDocs = await safeGetDocs(ledgerQ);
+        ledgerDocs.docs.forEach(d => {
+          const desc = d.data().description || '';
+          if (desc.includes(ret.returnNo)) {
+            batch.delete(doc(db, 'ledger', d.id));
+          }
+        });
+      } catch (lErr) {
+        console.warn("Could not delete ledger entry", lErr);
       }
       batch.delete(doc(db, 'employeeReturns', ret.id));
       await batch.commit();
@@ -258,7 +282,7 @@ export function EmployeePurchases() {
             const oldEmp = employees.find(e => e.id === editingPurchase.employeeId);
             if (oldEmp) {
               batch.update(doc(db, 'employees', oldEmp.id), {
-                advanceBalance: Math.max(0, (oldEmp.advanceBalance || 0) - editingPurchase.total),
+                advanceBalance: (Number(oldEmp.advanceBalance) || 0) - editingPurchase.total,
                 updatedAt: Timestamp.now()
               });
             }
@@ -392,19 +416,19 @@ export function EmployeePurchases() {
           if (editingReturn.employeeId === selectedEmpId) {
             const diff = total - editingReturn.total;
             batch.update(doc(db, 'employees', employee.id), {
-              advanceBalance: Math.max(0, (employee.advanceBalance || 0) - diff),
+              advanceBalance: (Number(employee.advanceBalance) || 0) - diff,
               updatedAt: Timestamp.now()
             });
           } else {
             const oldEmp = employees.find(e => e.id === editingReturn.employeeId);
             if (oldEmp) {
               batch.update(doc(db, 'employees', oldEmp.id), {
-                advanceBalance: (oldEmp.advanceBalance || 0) + editingReturn.total,
+                advanceBalance: (Number(oldEmp.advanceBalance) || 0) + editingReturn.total,
                 updatedAt: Timestamp.now()
               });
             }
             batch.update(doc(db, 'employees', employee.id), {
-              advanceBalance: Math.max(0, (employee.advanceBalance || 0) - total),
+              advanceBalance: (Number(employee.advanceBalance) || 0) - total,
               updatedAt: Timestamp.now()
             });
           }

@@ -1587,11 +1587,57 @@ export function Sales() {
 
         {tab === 'invoices' && showAdd && (
           <div 
+            id="sale-bill-form"
             className="card p-6 border-2 border-slate-200 dark:border-slate-700 shadow-md"
             onKeyDown={(e) => {
               if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault();
                 handleCheckout();
+                return;
+              }
+              if (e.key === 'Tab') {
+                // Close any open dropdowns so Tab moves cleanly to the next input box
+                if (showCustomerDropdown) setShowCustomerDropdown(false);
+                if (showItemDropdown) setShowItemDropdown(false);
+                if (showReturnItemDropdown) setShowReturnItemDropdown(false);
+
+                const activeEl = document.activeElement as HTMLElement | null;
+                if (activeEl && activeEl.id === 'item-search-input' && itemSearchQuery.trim()) {
+                  const branchInv = inventory.filter(i => i.branchId === (activeBranchId || targetBranchId));
+                  const exactMatch = branchInv.find(
+                    i => i.sku?.toLowerCase() === itemSearchQuery.trim().toLowerCase() || i.id === itemSearchQuery.trim()
+                  );
+                  if (exactMatch) {
+                    handleAddSpecificItem(exactMatch, 1);
+                    setItemSearchQuery('');
+                  }
+                }
+
+                const formEl = e.currentTarget;
+                const focusableBoxes = Array.from(
+                  formEl.querySelectorAll<HTMLElement>(
+                    'input:not([type="hidden"]):not([type="checkbox"]):not([disabled]):not([readonly]), select:not([disabled]), textarea:not([disabled]), button[data-bill-submit="true"]'
+                  )
+                ).filter(el => el.offsetParent !== null && el.tabIndex !== -1);
+
+                if (focusableBoxes.length > 0 && activeEl) {
+                  const currentIndex = focusableBoxes.indexOf(activeEl);
+                  if (currentIndex !== -1) {
+                    e.preventDefault();
+                    const nextIndex = e.shiftKey
+                      ? (currentIndex - 1 + focusableBoxes.length) % focusableBoxes.length
+                      : (currentIndex + 1) % focusableBoxes.length;
+                    const nextEl = focusableBoxes[nextIndex];
+                    if (nextEl) {
+                      nextEl.focus();
+                      if (nextEl instanceof HTMLInputElement && (nextEl.type === 'text' || nextEl.type === 'number')) {
+                        try {
+                          nextEl.select();
+                        } catch {}
+                      }
+                    }
+                  }
+                }
               }
             }}
           >
@@ -2892,6 +2938,7 @@ export function Sales() {
 
             <button 
               type="button"
+              data-bill-submit="true"
               onClick={handleCheckout} 
               disabled={isSubmitting}
               className={`w-full text-white py-3.5 rounded-xl font-bold text-base transition shadow-md disabled:opacity-50 flex items-center justify-center gap-2 ${
